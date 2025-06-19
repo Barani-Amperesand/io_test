@@ -1,0 +1,15 @@
+# Enable MV contactor power circuit on
+W A00000A0 30 07 00 00
+
+D 100
+
+# Enable MV contactor
+W A00000A0 C0 07 00 00
+
+D 1000
+
+# Enable MV contactor Feedback Power ON
+W A00000A0 C0 07 00 00
+
+# Disable MV contactor
+W A00000A0 00 07 00 00

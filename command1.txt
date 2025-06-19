@@ -1,0 +1,11 @@
+# Read FW version registers for LVLC Controller
+# Verify heartbeat yellow led
+# Verify Green solid for link with MC is successfull
+
+# Read Commit ID
+
+R A00080A8 4
+
+# Read Test Register
+R A00080AC 4
+
