@@ -1,6 +1,3 @@
-
-
-
 import serial
 import time
 import sys
@@ -10,42 +7,13 @@ from urllib.parse import urlencode
 import memory_pb2
 import register_pb2
 import requests
-import struct
 import os
 
-class VirtualPort:
-    def __init__(self):
-        self.is_open = True
-        self._buffer = b''
 
-    def write(self, data):
-        print(f"Virtual write: {data!r}")
-        if data.strip() == b'V':
-            self._buffer += b'VirtualPort v1.0\r\n>\r\n'
-        else:
-            self._buffer += b'OK\r\n>\r\n'
 
-    def read(self, size=1):
-        if not self._buffer:
-            return b''
-        result = self._buffer[:size]
-        self._buffer = self._buffer[size:]
-        return result
-
-    @property
-    def in_waiting(self):
-        return len(self._buffer)
-
-    def close(self):
-        self.is_open = False
-        
 
 class SerialCommandSender:
     def __init__(self, port, baudrate=115200, timeout=1):
-        """Initialize serial connection."""
-        if port =='COM3':
-            self.ser = VirtualPort()
-        else:
             try:
                 
                     self.ser = serial.Serial(
@@ -278,7 +246,7 @@ class CommandParsing:
                 if operation == 'R':
                     count = int(payload_str.strip())
                     
-                    print(f"Writing: base_url={self.ip}, address={address}, count={count}")
+                    print(f"Reading: base_url={self.ip}, address={address}, count={count}")
                     reg.read( address, count)
                 elif operation == 'W':
                     byte_list = payload_str.strip().split()
@@ -289,41 +257,53 @@ class CommandParsing:
                 print("-" * 20)
             else:
                 print(f"Skipping non-matching command: '{clean_line}'\n" + "-"*20)
-
 def main():
-    script_port = 'COM3'
-    default_ip = '192.168.0.59:7124'
+    if len(sys.argv) != 3:
+        sys.exit(1)
+    
+    running_script = sys.argv[0]
+    port_or_ip = sys.argv[1]
+    filename = sys.argv[2]
 
-    while True:
-        filename = input(f"Enter the file name to process: ")
-        script_path = os.path.join(filename)
-        if not os.path.isfile(script_path):
-            print(f"File '{script_path}' not found. Try again.")
-            continue
+    if any(char.isalpha() for char in port_or_ip) and '.' not in port_or_ip:
+        port = port_or_ip 
+        use_serial =  True
+    else:
+        ip_address = f"{port_or_ip}:7124"
+        use_serial = False
+       
 
-        ip_address = input(f"Enter the IP address (default: {default_ip}): ")
-        if not ip_address:
-            ip_address = default_ip
+    
+    if not os.path.isfile(filename):
+        print(f"Error: File '{filename}' not found")
+        sys.exit(1)
+    
+    
 
-        sender = None
-        try:
-            sender = SerialCommandSender(script_port)
+    sender = None 
+    if use_serial: #serial command only runs when port is given 
+        try: 
+            sender = SerialCommandSender(port)
             sender.send_command('V')
-            sender.process_file(script_path)
+            sender.process_file(filename)
         except Exception as e:
-            print(f"Error: {e}")
-        finally:
-            if sender:
+            print(f"Serial Error: {e}")
+        finally: 
+            if sender: 
                 sender.close()
-        with open(script_path, 'r') as f:
-            lines = f.readlines()
-        parser_obj = CommandParsing(lines, ip=ip_address)
-        parser_obj.parse()
+    else: #command parsing only runs when ip is given
+        try:
+            with open(filename, 'r') as f:
+                lines = f.readlines()
+            parser_obj = CommandParsing(lines, ip = ip_address)
+            parser_obj.parse()
+        except Exception as e:
+            print(f"Register Interface Error: {e}")
+    
+    print("Exiting")
 
-        again = input("Do you want to process another file? (y/n): ")
-        if again.lower() != 'y':
-            print("Exiting.")
-            break
 
 if __name__ == "__main__":
     main()
+
+
