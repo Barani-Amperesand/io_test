@@ -246,41 +246,56 @@ class CommandParsing:
                 if operation == 'R':
                     count = int(payload_str.strip())
                     
-                    print(f"Reading: base_url={self.ip}, address={address}, count={count}")
+                    print(f"Reading: address={address}, count={count}")
                     reg.read(address, count)
                     print()
                 elif operation == 'W':
-                    byte_strings = payload_str.strip().split()
+                    # Get all space-separated parts of the payload
+                    payload_parts = payload_str.strip().split()
                     
-                    # Validate that the number of bytes is a non-zero multiple of 4
-                    if not byte_strings or len(byte_strings) % 4 != 0:
-                        print(f"Error: Write operation requires the number of bytes to be a multiple of 4. "
-                              f"Got {len(byte_strings)} for line: '{clean_line}'")
+                    if not payload_parts:
+                        print(f"Error: Write command has no payload data for line: '{clean_line}'")
+                        print("-" * 20)
                         continue
 
                     try:
                         payload = []
-                        # Iterate through the byte strings in chunks of 4
-                        for i in range(0, len(byte_strings), 4):
-                            # Get a 4-byte chunk
-                            chunk = byte_strings[i:i+4]
-                            
-                            # Join the chunk into a single hex string (e.g., '01234567')
-                            full_hex_string = "".join(chunk)
-                            
-                            # Convert the hex string to a uint32 integer
-                            uint32_value = int(full_hex_string, 16)
-                            
-                            # Add the integer to our payload list
-                            payload.append(uint32_value)
 
-                        # Create a readable string of the hex values for printing
-                        hex_values_str = ', '.join([hex(v) for v in payload])
+                        # Case 1: Payload parts are 8-character words (e.g., "05060708")
+                        if len(payload_parts[0]) == 8:
+                            # Validate that ALL parts are 8 characters long
+                            if not all(len(p) == 8 for p in payload_parts):
+                                raise ValueError("If using 8-character words, all must be 8 characters long.")
+                            
+                            # Convert each 8-character hex string directly to a uint32
+                            for word_string in payload_parts:
+                                payload.append(int(word_string, 16))
+
+                        # Case 2: Payload parts are 2-character bytes (e.g., "01 02 03 04")
+                        elif len(payload_parts[0]) == 2:
+                            # Validate that the total number of bytes is a multiple of 4
+                            if len(payload_parts) % 4 != 0:
+                                raise ValueError(f"When using 2-character bytes, the total count must be a multiple of 4. Got {len(payload_parts)}.")
+                            
+                            # Group the bytes into 4-byte chunks and convert each to a uint32
+                            for i in range(0, len(payload_parts), 4):
+                                chunk = payload_parts[i:i+4]
+                                full_hex_string = "".join(chunk)
+                                payload.append(int(full_hex_string, 16))
+                        
+                        # Case 3: Invalid format
+                        else:
+                            raise ValueError("Payload must be space-separated 8-character words OR 2-character bytes.")
+
+
+                        # If parsing was successful, print and send the request
+                        hex_values_str = ', '.join([f"0x{v:08X}" for v in payload])
                         print(f"Writing: address={address}, values=[{hex_values_str}]")
                         reg.write(address, payload)
 
-                    except ValueError:
-                        print(f"Error: Invalid byte format in payload for line: '{clean_line}'")
+                    except ValueError as e:
+                        # Catch any errors from int() conversion or our custom validation
+                        print(f"Error processing write command for line: '{clean_line}'\n  -> {e}")
                         continue
                     print()
             else:
