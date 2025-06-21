@@ -176,7 +176,7 @@ class ReadRegisterInterface:
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             print(f"Error sending request: {e}")
-            return  #no sys.exit cause there might be other commands to process 
+            return
 
         data = response.content
         message = memory_pb2.MemoryResponse()
@@ -184,10 +184,10 @@ class ReadRegisterInterface:
             message.ParseFromString(data)
         except Exception as e:
             print(f"Error decoding protobuf: {e}")
-            return  #no sys.exit cause there might be other commands to process 
+            return
 
         for i, value in enumerate(message.register_interface.result[: int(count)]):
-            print(f"Address {hex(message.register_interface.address+i*4)}: {value}")
+            print(f"Address {hex(message.register_interface.address+i*4)}: 0x{value:08X}")
 
     def write(self, address, payload):
         #create a MemoryRequest for writing register interface value 
@@ -213,7 +213,7 @@ class ReadRegisterInterface:
             response.raise_for_status() #Raises an exception for 4xx/5xx codes
         except requests.exceptions.RequestException as e:
             print(f"Error sending request: {e}")
-            return 
+            return
 
         data = response.content
         message = memory_pb2.MemoryResponse()
@@ -222,38 +222,6 @@ class ReadRegisterInterface:
         except Exception as e:
             print(f"Error decoding protobuf: {e}")
             return
-
-   
-
-    def validate_hex(value):
-        """Validate if the value is a 32 bit hex number (8 characters)"""
-
-        try:
-            #Check if it starts with 0x or not, remove prefix if present 
-            if value.startswith("0x") or value.startswith("0x"):
-                value = value[2:]
-            #Ensure it's 8 characters long and valid hex 
-            if len(value) != 8 or not all (c in "0123456789abcdefABCDEF" for c in value):
-                raise ValueError
-            #Convert to int to validate it's 32 bit number 
-            num = int(value, 16)
-            if num < 0 or num > 0xFFFFFFFF:
-                raise ValueError 
-            return value 
-        except ValueError:
-            raise argparse.ArgumentTypeError(f"'{value}' is not a valid 32-bit hex number")
-        
-    def hex_to_little_endian(hex_str):
-        """Convert a big-endian hex string to little-endian integer."""
-        if hex_str.startswith("0x") or hex_str.startswith("0X"):
-            hex_str = hex_str[2:]
-        #Convert to int from big endian hex
-        big_endian = int(hex_str, 16)
-        #Comvert to little-endian by swapping bytes 
-        little_endian = int.from_bytes(
-            big_endian.to_bytes(4, byteorder="big"), byteorder="little"
-        )
-        return little_endian
 
 class CommandParsing:
     pattern = r"^\s*([RW])\s+([0-9A-Fa-f]+)\s+(.*)$"
@@ -280,15 +248,48 @@ class CommandParsing:
                     
                     print(f"Reading: base_url={self.ip}, address={address}, count={count}")
                     reg.read(address, count)
+                
                 elif operation == 'W':
-                    byte_list = payload_str.strip().split()
-                    little_endian_values = [ReadRegisterInterface.hex_to_little_endian(v) for v in byte_list] #from the main function
+                    # MODIFIED BLOCK: Handle byte length in multiples of four
+                    byte_strings = payload_str.strip().split()
                     
-                    print(f"Writing: base_url={self.ip}, address={address}, values={little_endian_values}")
-                    reg.write(address, little_endian_values)
+                    # Validate that the number of bytes is a non-zero multiple of 4
+                    if not byte_strings or len(byte_strings) % 4 != 0:
+                        print(f"Error: Write operation requires the number of bytes to be a multiple of 4. "
+                              f"Got {len(byte_strings)} for line: '{clean_line}'")
+                        print("-" * 20)
+                        continue
+
+                    try:
+                        payload = []
+                        # Iterate through the byte strings in chunks of 4
+                        for i in range(0, len(byte_strings), 4):
+                            # Get a 4-byte chunk
+                            chunk = byte_strings[i:i+4]
+                            
+                            # Join the chunk into a single hex string (e.g., '01234567')
+                            full_hex_string = "".join(chunk)
+                            
+                            # Convert the hex string to a uint32 integer
+                            uint32_value = int(full_hex_string, 16)
+                            
+                            # Add the integer to our payload list
+                            payload.append(uint32_value)
+
+                        # Create a readable string of the hex values for printing
+                        hex_values_str = ', '.join([hex(v) for v in payload])
+                        print(f"Writing: base_url={self.ip}, address={address}, values=[{hex_values_str}]")
+                        reg.write(address, payload)
+
+                    except ValueError:
+                        print(f"Error: Invalid byte format in payload for line: '{clean_line}'")
+                        print("-" * 20)
+                        continue
+
                 print("-" * 20)
             else:
                 print(f"Skipping non-matching command: '{clean_line}'\n" + "-"*20)
+
 
 def main():
     # Setup command-line argument parsing
@@ -345,7 +346,7 @@ def main():
         finally:
             if sender:
                 sender.close()
-        print("Serial mode finished")
+        print("Serial mode finished.")
 
     elif args.mode == 'http':
         print(f"Running in HTTP mode (File: {args.filename}, IP: {args.ip})")
@@ -358,7 +359,8 @@ def main():
             parser_obj.parse()
         except Exception as e:
             print(f"An error occurred during HTTP execution: {e}")
-        print("HTTP mode finished")
+        print("HTTP mode finished.")
+
 
 if __name__ == "__main__":
     main()
