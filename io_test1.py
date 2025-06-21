@@ -187,7 +187,7 @@ class ReadRegisterInterface:
             return
 
         for i, value in enumerate(message.register_interface.result[: int(count)]):
-            print(f"Address {hex(message.register_interface.address+i*4)}: 0x{value:08X}")
+            print(f"{hex(message.register_interface.address+i*4)}: 0x{value:08X}")
 
     def write(self, address, payload):
         #create a MemoryRequest for writing register interface value 
@@ -248,16 +248,14 @@ class CommandParsing:
                     
                     print(f"Reading: base_url={self.ip}, address={address}, count={count}")
                     reg.read(address, count)
-                
+                    print()
                 elif operation == 'W':
-                    # MODIFIED BLOCK: Handle byte length in multiples of four
                     byte_strings = payload_str.strip().split()
                     
                     # Validate that the number of bytes is a non-zero multiple of 4
                     if not byte_strings or len(byte_strings) % 4 != 0:
                         print(f"Error: Write operation requires the number of bytes to be a multiple of 4. "
                               f"Got {len(byte_strings)} for line: '{clean_line}'")
-                        print("-" * 20)
                         continue
 
                     try:
@@ -278,15 +276,13 @@ class CommandParsing:
 
                         # Create a readable string of the hex values for printing
                         hex_values_str = ', '.join([hex(v) for v in payload])
-                        print(f"Writing: base_url={self.ip}, address={address}, values=[{hex_values_str}]")
+                        print(f"Writing: address={address}, values=[{hex_values_str}]")
                         reg.write(address, payload)
 
                     except ValueError:
                         print(f"Error: Invalid byte format in payload for line: '{clean_line}'")
-                        print("-" * 20)
                         continue
-
-                print("-" * 20)
+                    print()
             else:
                 print(f"Skipping non-matching command: '{clean_line}'\n" + "-"*20)
 
@@ -333,6 +329,7 @@ def main():
 
     if args.mode == 'serial':
         print(f"Running in SERIAL mode (File: {args.filename}, Port: {args.port})")
+        print()
         sender = None
         try:
             # Instantiate the sender with the specified port
@@ -350,6 +347,7 @@ def main():
 
     elif args.mode == 'http':
         print(f"Running in HTTP mode (File: {args.filename}, IP: {args.ip})")
+        print()
         try:
             # Read all lines from the file
             with open(args.filename, 'r') as f:
