@@ -7,23 +7,52 @@ from urllib.parse import urlencode
 import memory_pb2
 import register_pb2
 import requests
+import struct
 import os
 
+class VirtualPort:
+    def __init__(self):
+        self.is_open = True
+        self._buffer = b''
 
+    def write(self, data):
+        print(f"Virtual write: {data!r}")
+        if data.strip() == b'V':
+            self._buffer += b'VirtualPort v1.0\r\n>\r\n'
+        else:
+            self._buffer += b'OK\r\n>\r\n'
 
+    def read(self, size=1):
+        if not self._buffer:
+            return b''
+        result = self._buffer[:size]
+        self._buffer = self._buffer[size:]
+        return result
+
+    @property
+    def in_waiting(self):
+        return len(self._buffer)
+
+    def close(self):
+        self.is_open = False
+        
 
 class SerialCommandSender:
     def __init__(self, port, baudrate=115200, timeout=1):
+        """Initialize serial connection."""
+        if port =='COM3': # Keep virtual port for easy testing
+            print("Using VirtualPort for testing")
+            self.ser = VirtualPort()
+        else:
             try:
-                
-                    self.ser = serial.Serial(
-                        port=port,
-                        baudrate=baudrate,
-                        timeout=timeout,
-                        bytesize=serial.EIGHTBITS,
-                        parity=serial.PARITY_NONE,
-                        stopbits=serial.STOPBITS_ONE
-                    )
+                self.ser = serial.Serial(
+                    port=port,
+                    baudrate=baudrate,
+                    timeout=timeout,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE
+                )
             except serial.SerialException as e:
                 print(f"Error opening serial port {port}: {e}")
                 sys.exit(1)
@@ -184,7 +213,7 @@ class ReadRegisterInterface:
             response.raise_for_status() #Raises an exception for 4xx/5xx codes
         except requests.exceptions.RequestException as e:
             print(f"Error sending request: {e}")
-            return #sys.exit(1) ??
+            return 
 
         data = response.content
         message = memory_pb2.MemoryResponse()
@@ -192,7 +221,7 @@ class ReadRegisterInterface:
             message.ParseFromString(data)
         except Exception as e:
             print(f"Error decoding protobuf: {e}")
-            return #sys.exit(1) ??
+            return
 
    
 
@@ -231,10 +260,13 @@ class CommandParsing:
 
     def __init__(self, lines, ip=None):
         self.lines = lines
-        self.ip = ip
+        if not ip.startswith('http'):
+            self.ip = f"http://{ip}"
+        else:
+            self.ip = ip
 
     def parse(self):
-        reg = ReadRegisterInterface(f"http://{self.ip}") #calling the class here 
+        reg = ReadRegisterInterface(self.ip) #calling the class here 
         for line in self.lines:
             clean_line = line.strip()
             if not clean_line or clean_line.startswith('#'):
@@ -247,63 +279,86 @@ class CommandParsing:
                     count = int(payload_str.strip())
                     
                     print(f"Reading: base_url={self.ip}, address={address}, count={count}")
-                    reg.read( address, count)
+                    reg.read(address, count)
                 elif operation == 'W':
                     byte_list = payload_str.strip().split()
                     little_endian_values = [ReadRegisterInterface.hex_to_little_endian(v) for v in byte_list] #from the main function
                     
                     print(f"Writing: base_url={self.ip}, address={address}, values={little_endian_values}")
-                    reg.write( address, little_endian_values)
+                    reg.write(address, little_endian_values)
                 print("-" * 20)
             else:
                 print(f"Skipping non-matching command: '{clean_line}'\n" + "-"*20)
+
 def main():
-    if len(sys.argv) != 3:
+    # Setup command-line argument parsing
+    parser = argparse.ArgumentParser(
+        description="Send commands to a device via Serial or HTTP.",
+        formatter_class=argparse.RawTextHelpFormatter # For better help text formatting
+    )
+    
+    parser.add_argument(
+        "filename", 
+        help="Path to the command file to execute."
+    )
+    
+    parser.add_argument(
+        "--mode", 
+        choices=['serial', 'http'], 
+        default='http',
+        help="Execution mode:\n"
+             "'serial': for general commands sent over a COM port (supports LOOP).\n"
+             "'http': for specific 'R/W address payload' commands sent over HTTP (default)."
+    )
+
+    parser.add_argument(
+        "--ip", 
+        default='192.168.0.59:7124', 
+        help="IP address and port for HTTP mode (default: 192.168.0.59:7124)."
+    )
+    
+    parser.add_argument(
+        "--port", 
+        default='COM3', 
+        help="COM port for serial mode (e.g., COM3 on Windows, /dev/ttyUSB0 on Linux)."
+    )
+
+    args = parser.parse_args()
+
+    # Check if the input file exists
+    if not os.path.isfile(args.filename):
+        print(f"Error: File '{args.filename}' not found.")
         sys.exit(1)
-    
-    running_script = sys.argv[0]
-    port_or_ip = sys.argv[1]
-    filename = sys.argv[2]
 
-    if any(char.isalpha() for char in port_or_ip) and '.' not in port_or_ip:
-        port = port_or_ip 
-        use_serial =  True
-    else:
-        ip_address = f"{port_or_ip}:7124"
-        use_serial = False
-       
-
-    
-    if not os.path.isfile(filename):
-        print(f"Error: File '{filename}' not found")
-        sys.exit(1)
-    
-    
-
-    sender = None 
-    if use_serial: #serial command only runs when port is given 
-        try: 
-            sender = SerialCommandSender(port)
-            sender.send_command('V')
-            sender.process_file(filename)
-        except Exception as e:
-            print(f"Serial Error: {e}")
-        finally: 
-            if sender: 
-                sender.close()
-    else: #command parsing only runs when ip is given
+    if args.mode == 'serial':
+        print(f"Running in SERIAL mode (File: {args.filename}, Port: {args.port})")
+        sender = None
         try:
-            with open(filename, 'r') as f:
+            # Instantiate the sender with the specified port
+            sender = SerialCommandSender(args.port)
+            # Optional: send a version command to check connection
+            sender.send_command('V')
+            # Process the entire command file
+            sender.process_file(args.filename)
+        except Exception as e:
+            print(f"An error occurred during serial execution: {e}")
+        finally:
+            if sender:
+                sender.close()
+        print("Serial mode finished")
+
+    elif args.mode == 'http':
+        print(f"Running in HTTP mode (File: {args.filename}, IP: {args.ip})")
+        try:
+            # Read all lines from the file
+            with open(args.filename, 'r') as f:
                 lines = f.readlines()
-            parser_obj = CommandParsing(lines, ip = ip_address)
+            # Instantiate the parser with the lines and IP
+            parser_obj = CommandParsing(lines, ip=args.ip)
             parser_obj.parse()
         except Exception as e:
-            print(f"Register Interface Error: {e}")
-    
-    print("Exiting")
-
+            print(f"An error occurred during HTTP execution: {e}")
+        print("HTTP mode finished")
 
 if __name__ == "__main__":
     main()
-
-
