@@ -143,9 +143,9 @@ Writes one or more 32-bit values. The payload can be specified in two formats.
     W 6000000C AABBCCDD DEADBEEF
     ```
 
-### 5.4. Delay (`D`) - HTTP Mode Only
+### 5.4. Delay (`D`)
 
-Pauses the execution of the script for a specified duration. **This command is ignored in serial mode.**
+Pauses the execution of the script for a specified duration. 
 
 *   **Syntax:** `D <milliseconds>`
 *   **Example:**
