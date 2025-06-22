@@ -73,7 +73,7 @@ def parse_file_commands(lines):
                 print(f"Error in loop syntax: {e}")
         
         else:
-            # Instead of executing, YIELD the normal command
+            # Yield any other command line (R, W, D, etc.) as-is
             yield line
         
         i += 1
@@ -241,12 +241,21 @@ class CommandParsing:
         # Create the interface object once
         self.reg_interface = ReadRegisterInterface(self.ip)
 
-    def parse(self, lines): # Takes 'lines' as an argument here instead
+    def parse(self, lines):
         """Process commands from the generator for HTTP mode."""
-        # Use the central generator to get each clean command
         for command_line in parse_file_commands(lines):
             
-            # The rest of your existing logic fits perfectly inside this loop
+            if command_line.startswith('D '):
+                try:
+                    milliseconds = int(command_line.split()[1])
+                    seconds = milliseconds / 1000.0
+                    print(f">> Delaying for {milliseconds} milliseconds...")
+                    time.sleep(seconds)
+                except (ValueError, IndexError):
+                    print(f"Error: Invalid delay format: '{command_line}'. Expected 'D <milliseconds>'.")
+                # After handling the delay, move to the next command
+                continue 
+
             match = re.match(self.pattern, command_line)
             if match:
                 operation, address, payload_str = match.groups()
@@ -329,6 +338,8 @@ def main():
     if not os.path.isfile(args.filename):
         print(f"Error: File '{args.filename}' not found.")
         sys.exit(1)
+
+    print("IO Tool Serial & HTTP - v1.0")
 
     if args.mode == 'serial':
         print(f"Running in SERIAL mode (File: {args.filename}, Port: {args.port})")
