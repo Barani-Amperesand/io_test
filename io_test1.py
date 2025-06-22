@@ -260,7 +260,8 @@ class CommandParsing:
             if match:
                 operation, address, payload_str = match.groups()
                 if operation == 'R':
-                    count = int(payload_str.strip())
+                    # For backward compatibility, consider count given as bytes divided by 4
+                    count = int(payload_str.strip()) // 4
                     print(f"Reading: address={address}, count={count}")
                     self.reg_interface.read(address, count)
                     print()
