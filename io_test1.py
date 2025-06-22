@@ -10,6 +10,73 @@ import requests
 import struct
 import os
 
+def parse_file_commands(lines):
+    """
+    A generator that parses file lines, handles comments and LOOP constructs,
+    and yields individual, clean commands.
+    """
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Skip empty lines
+        if not line:
+            i += 1
+            continue
+
+        # Handle comment lines (both full-line and in-line)
+        comment_pos = line.find('#')
+        if comment_pos != -1:
+            if comment_pos == 0:
+                print(">> " + line[comment_pos+1:])
+            # This strips the comment from the line
+            line = line[:comment_pos].strip()
+            if not line:  # Skip if the line only contained a comment
+                i += 1
+                continue
+
+        # Handle LOOP start
+        if line.startswith('LOOP '):
+            try:
+                iteration_count = int(line.split()[1])
+                loop_commands = []
+                i += 1
+                
+                # Collect commands until LOOP END
+                while i < len(lines):
+                    loop_line = lines[i].strip()
+                    # Also handle comments inside the loop block
+                    comment_pos = loop_line.find('#')
+                    if comment_pos != -1:
+                        if comment_pos == 0:
+                            print(">> " + loop_line[comment_pos+1:])
+                        loop_line = loop_line[:comment_pos].strip()
+                    
+                    if loop_line == 'LOOP END':
+                        break
+                    elif loop_line:
+                        loop_commands.append(loop_line)
+                    i += 1
+                
+                if i >= len(lines) and (i == 0 or lines[i-1].strip() != 'LOOP END'):
+                     raise ValueError("LOOP END not found")
+                
+                # Instead of executing, YIELD the commands from the expanded loop
+                print(f">> Starting loop with {iteration_count} iterations")
+                for iteration in range(iteration_count):
+                    print(f">> Iteration {iteration + 1}/{iteration_count}")
+                    for cmd in loop_commands:
+                        yield cmd
+                print(">> Loop completed")
+            
+            except (ValueError, IndexError) as e:
+                print(f"Error in loop syntax: {e}")
+        
+        else:
+            # Instead of executing, YIELD the normal command
+            yield line
+        
+        i += 1
 class VirtualPort:
     def __init__(self):
         self.is_open = True
@@ -89,73 +156,13 @@ class SerialCommandSender:
             self.send_command(command)
 
     def process_file(self, filename):
-        """Process command file and send commands."""
+        """Process command file by consuming from the central command generator."""
         try:
             with open(filename, 'r') as file:
                 lines = file.readlines()
-                
-            i = 0
-            while i < len(lines):
-                line = lines[i].strip()
-                
-                # Skip empty lines
-                if not line:
-                    i += 1
-                    continue
-                
-                # Handle comment lines
-                comment_pos = line.find('#')
-                if comment_pos != -1:
-                    if comment_pos == 0:
-                        print(">> ", line[comment_pos+1:])
-                    line = line[:comment_pos].strip()
-                    if not line:  # Skip if line only contained comment
-                        i += 1
-                        continue
-
-                # Check for loop start
-                if line.startswith('LOOP '):
-                    try:
-                        iteration_count = int(line.split()[1])
-                        loop_commands = []
-                        i += 1
-                        
-                        # Collect commands until LOOP END
-                        while i < len(lines):
-                            loop_line = lines[i].strip()
-                            
-                            # Handle comments in loop
-                            comment_pos = loop_line.find('#')
-                            if comment_pos != -1:
-                                if comment_pos == 0:
-                                    print(">> ", loop_line[comment_pos+1:])
-                                loop_line = loop_line[:comment_pos].strip()
-                                
-                            if loop_line == 'LOOP END':
-                                break
-                            elif loop_line:  # Add non-empty lines to loop commands
-                                loop_commands.append(loop_line)
-                            i += 1
-                            
-                        if i >= len(lines):
-                            raise ValueError("LOOP END not found")
-                            
-                        # Execute the loop
-                        print(f">> Starting loop with {iteration_count} iterations")
-                        for iteration in range(iteration_count):
-                            print(f">> Iteration {iteration + 1}/{iteration_count}")
-                            self.execute_commands(loop_commands)
-                        print(">> Loop completed")
-                            
-                    except (ValueError, IndexError) as e:
-                        print(f"Error in loop syntax: {e}")
-                        
-                else:
-                    # Process normal command
-                    self.send_command(line)
-                    
-                i += 1
-                    
+            # Use the generator to get each clean command
+            for command in parse_file_commands(lines):
+                self.send_command(command)
         except Exception as e:
             print(f"Error: {e}")
 
@@ -226,81 +233,62 @@ class ReadRegisterInterface:
 class CommandParsing:
     pattern = r"^\s*([RW])\s+([0-9A-Fa-f]+)\s+(.*)$"
 
-    def __init__(self, lines, ip=None):
-        self.lines = lines
+    def __init__(self, ip=None): # No longer takes 'lines' here
         if not ip.startswith('http'):
             self.ip = f"http://{ip}"
         else:
             self.ip = ip
+        # Create the interface object once
+        self.reg_interface = ReadRegisterInterface(self.ip)
 
-    def parse(self):
-        reg = ReadRegisterInterface(self.ip) #calling the class here 
-        for line in self.lines:
-            clean_line = line.strip()
-            if not clean_line or clean_line.startswith('#'):
-                continue
-
-            match = re.match(self.pattern, clean_line)
+    def parse(self, lines): # Takes 'lines' as an argument here instead
+        """Process commands from the generator for HTTP mode."""
+        # Use the central generator to get each clean command
+        for command_line in parse_file_commands(lines):
+            
+            # The rest of your existing logic fits perfectly inside this loop
+            match = re.match(self.pattern, command_line)
             if match:
                 operation, address, payload_str = match.groups()
                 if operation == 'R':
                     count = int(payload_str.strip())
-                    
                     print(f"Reading: address={address}, count={count}")
-                    reg.read(address, count)
+                    self.reg_interface.read(address, count)
                     print()
                 elif operation == 'W':
-                    # Get all space-separated parts of the payload
                     payload_parts = payload_str.strip().split()
                     
                     if not payload_parts:
-                        print(f"Error: Write command has no payload data for line: '{clean_line}'")
-                        print("-" * 20)
+                        print(f"Error: Write command has no payload data for line: '{command_line}'")
                         continue
 
                     try:
                         payload = []
-
-                        # Case 1: Payload parts are 8-character words (e.g., "05060708")
                         if len(payload_parts[0]) == 8:
-                            # Validate that ALL parts are 8 characters long
                             if not all(len(p) == 8 for p in payload_parts):
-                                raise ValueError("If using 8-character words, all must be 8 characters long.")
-                            
-                            # Convert each 8-character hex string directly to a uint32
+                                raise ValueError("If using 8-char words, all must be 8 chars long.")
                             for word_string in payload_parts:
                                 payload.append(int(word_string, 16))
-
-                        # Case 2: Payload parts are 2-character bytes (e.g., "01 02 03 04")
                         elif len(payload_parts[0]) == 2:
-                            # Validate that the total number of bytes is a multiple of 4
                             if len(payload_parts) % 4 != 0:
-                                raise ValueError(f"When using 2-character bytes, the total count must be a multiple of 4. Got {len(payload_parts)}.")
-                            
-                            # Group the bytes into 4-byte chunks and convert each to a uint32
+                                raise ValueError(f"Byte count must be a multiple of 4. Got {len(payload_parts)}.")
                             for i in range(0, len(payload_parts), 4):
                                 chunk = payload_parts[i:i+4]
                                 full_hex_string = "".join(chunk)
                                 payload.append(int(full_hex_string, 16))
-                        
-                        # Case 3: Invalid format
                         else:
-                            raise ValueError("Payload must be space-separated 8-character words OR 2-character bytes.")
+                            raise ValueError("Payload must be space-separated 8-char words OR 2-char bytes.")
 
-
-                        # If parsing was successful, print and send the request
                         hex_values_str = ', '.join([f"0x{v:08X}" for v in payload])
                         print(f"Writing: address={address}, values=[{hex_values_str}]")
-                        reg.write(address, payload)
+                        self.reg_interface.write(address, payload)
 
                     except ValueError as e:
-                        # Catch any errors from int() conversion or our custom validation
-                        print(f"Error processing write command for line: '{clean_line}'\n  -> {e}")
+                        print(f"Error processing write command for line: '{command_line}'\n  -> {e}")
                         continue
                     print()
             else:
-                print(f"Skipping non-matching command: '{clean_line}'\n" + "-"*20)
-
+                print(f"Skipping non-matching command: '{command_line}'")
 
 def main():
     # Setup command-line argument parsing
@@ -364,12 +352,11 @@ def main():
         print(f"Running in HTTP mode (File: {args.filename}, IP: {args.ip})")
         print()
         try:
-            # Read all lines from the file
             with open(args.filename, 'r') as f:
                 lines = f.readlines()
-            # Instantiate the parser with the lines and IP
-            parser_obj = CommandParsing(lines, ip=args.ip)
-            parser_obj.parse()
+            # Adjust the call to match the new class structure
+            parser_obj = CommandParsing(ip=args.ip)
+            parser_obj.parse(lines)
         except Exception as e:
             print(f"An error occurred during HTTP execution: {e}")
         print("HTTP mode finished.")
