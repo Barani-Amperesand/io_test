@@ -194,7 +194,8 @@ class ReadRegisterInterface:
             return
 
         for i, value in enumerate(message.register_interface.result[: int(count)]):
-            print(f"{hex(message.register_interface.address+i*4)}: 0x{value:08X}")
+            addr_offset = message.register_interface.address + (i * 4)
+            print(f"0x{addr_offset:08X}: 0x{value:08X}")
 
     def write(self, address, payload):
         #create a MemoryRequest for writing register interface value 
