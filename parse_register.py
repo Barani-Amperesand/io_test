@@ -74,7 +74,7 @@ def load_register_map(excel_path: str) -> Dict[str, List[Dict[str, str]]]:
                     'description': row.get('RegDescription', '').strip(),
                     'slice': row.get('posslice', '').strip(),
                     'label': instance_label,
-                    'format': data_format  # Add the format specifier
+                    'format': data_format
                 }
 
                 if offset_addr_str not in register_map:
@@ -115,26 +115,27 @@ def process_and_print_register(address_str: str, value_str: str, mc_map: dict, l
     print(f"Input Value: 0x{value_int:08X} ({value_int})")
     print("-" * 80)
     
-    # Updated table header for clarity
     print(f"{'Label':<35} {'Slice':<10} {'Value (Hex)':<15} {'Interpreted Value':<17}")
     print(f"{'-'*35:<35} {'-'*10:<10} {'-'*15:<15} {'-'*17}")
     
     for field in fields:
         label, slice_str = field['label'], field['slice']
-        data_format = field.get('format', 'decimal') # Default to decimal if format key is missing
+        data_format = field.get('format', 'decimal')
         try:
             high, low = int(slice_str.split(':')[0]), int(slice_str.split(':')[1]) if ':' in slice_str else int(slice_str)
             width = high - low + 1
             field_value_int = ((value_int >> low) & ((1 << width) - 1))
             prefixed_label = f"{field_prefix}{label}"
 
-            # Determine how to display the value based on the format
             if data_format == 'float' and width == 32:
                 float_val = int_to_float32(field_value_int)
-                display_value = f"{float_val:g}" # Use 'g' for general, concise float formatting
+                display_value = f"{float_val:g}"
+                # Append '.0' to whole numbers to signify they are floats
+                if '.' not in display_value and 'e' not in display_value.lower():
+                    display_value += ".0"
             else:
                 display_value = str(field_value_int)
-                if data_format == 'float': # Add a warning if a non-32-bit field was marked as float
+                if data_format == 'float':
                     display_value += " (non-32-bit)"
 
             print(f"{prefixed_label:<35} {slice_str:<10} {'0x' + hex(field_value_int)[2:].upper():<15} {display_value:<17}")
