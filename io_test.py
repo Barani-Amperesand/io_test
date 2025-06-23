@@ -138,7 +138,7 @@ class VirtualPort:
 class SerialCommandSender:
     def __init__(self, port, baudrate=115200, timeout=1, decoder=None):
         self.decoder = decoder
-        if port =='COM3':
+        if port.upper() == 'VIRTUAL':
             print("Using VirtualPort for testing")
             self.ser = VirtualPort()
         else:
@@ -211,7 +211,7 @@ class ReadRegisterInterface:
         for i, value in enumerate(message.register_interface.result[: int(count)]):
             addr_offset = message.register_interface.address + (i * 4)
             if self.decoder: self.decoder.decode(addr_offset, value, do_print=True)
-            else: print(f"0x{addr_offset:08X}: 0x{value:08X}")
+            else: print(f"0x{addr_offset:08X} 0x{value:08X}")
     def read_single_register(self, address):
         query = urlencode({"address": address, "count": 1})
         url = f"{self.base_url}/register/read?{query}"
