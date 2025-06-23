@@ -16,25 +16,85 @@ try:
 except ImportError:
     DECODER_AVAILABLE = False
 
+# Helper function for the version check
+def _print_warning_banner(messages):
+    """Prints a highly visible warning banner."""
+    print("\n" + "*" * 80)
+    print("*" + " " * 78 + "*")
+    for msg in messages:
+        print(f"* {'!! WARNING !!':<15} {msg:<60} *")
+    print("*" + " " * 78 + "*")
+    print("*" * 80 + "\n")
+
+# The main version checking logic
+def perform_version_check(comm_interface, mc_filepath, lc_filepath):
+    """
+    Reads hardware revision registers and compares them against register map file versions.
+    """
+    print("Performing hardware and file version integrity check...")
+    
+    # 1. Extract versions from filenames
+    mc_match = re.search(r'(\d+)\.(\d+)\.(\d+)', os.path.basename(mc_filepath))
+    lc_match = re.search(r'(\d+)\.(\d+)\.(\d+)', os.path.basename(lc_filepath))
+    
+    if not mc_match or not lc_match:
+        print("WARNING: Could not parse version numbers from one or more register map filenames. Skipping check.")
+        return
+
+    mc_file_ver = tuple(map(int, mc_match.groups()))
+    lc_file_ver = tuple(map(int, lc_match.groups()))
+
+    # 2. Check MC Version
+    mc_hw_val = comm_interface.read_single_register("A00080A4")
+    if mc_hw_val is None:
+        print("WARNING: Failed to read MC hardware revision register. Skipping check.")
+    elif mc_hw_val == 0:
+        print("WARNING: MC hardware revision is 0x0. Device may be uninitialized. Skipping check.")
+    else:
+        hw_major = (mc_hw_val >> 24) & 0xFF
+        hw_minor = (mc_hw_val >> 16) & 0xFF
+        hw_patch = (mc_hw_val >> 8) & 0xFF
+        mc_hw_ver = (hw_major, hw_minor, hw_patch)
+        if mc_hw_ver != mc_file_ver:
+            _print_warning_banner([
+                "Master Controller (MC) version mismatch!",
+                f"  Hardware reported: {hw_major}.{hw_minor}.{hw_patch}",
+                f"  Register map file is for: {mc_file_ver[0]}.{mc_file_ver[1]}.{mc_file_ver[2]}",
+                "Parsing results may be incorrect."
+            ])
+
+    # 3. Check LC Version
+    lc_hw_val = comm_interface.read_single_register("A00088A8")
+    if lc_hw_val is None:
+        print("WARNING: Failed to read LC hardware revision register. Skipping check.")
+    elif lc_hw_val == 0:
+        print("WARNING: LC hardware revision is 0x0. Device may be uninitialized. Skipping check.")
+    else:
+        hw_major = (lc_hw_val >> 24) & 0xFF
+        hw_minor = (lc_hw_val >> 16) & 0xFF
+        hw_patch = (lc_hw_val >> 8) & 0xFF
+        lc_hw_ver = (hw_major, hw_minor, hw_patch)
+        if lc_hw_ver != lc_file_ver:
+            _print_warning_banner([
+                "Local Controller (LC) version mismatch!",
+                f"  Hardware reported: {hw_major}.{hw_minor}.{hw_patch}",
+                f"  Register map file is for: {lc_file_ver[0]}.{lc_file_ver[1]}.{lc_file_ver[2]}",
+                "Parsing results may be incorrect."
+            ])
+    
+    print("Version integrity check complete.\n")
+
+
 def parse_file_commands(lines):
-    """
-    A generator that parses file lines, handles comments and LOOP constructs,
-    and yields individual, clean commands.
-    """
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        if not line:
-            i += 1
-            continue
+        if not line: i += 1; continue
         comment_pos = line.find('#')
         if comment_pos != -1:
-            if comment_pos == 0:
-                print(">> " + line[comment_pos+1:])
+            if comment_pos == 0: print(">> " + line[comment_pos+1:])
             line = line[:comment_pos].strip()
-            if not line:
-                i += 1
-                continue
+            if not line: i += 1; continue
         if line.startswith('LOOP '):
             try:
                 iteration_count = int(line.split()[1])
@@ -44,51 +104,39 @@ def parse_file_commands(lines):
                     loop_line = lines[i].strip()
                     comment_pos = loop_line.find('#')
                     if comment_pos != -1:
-                        if comment_pos == 0:
-                            print(">> " + loop_line[comment_pos+1:])
+                        if comment_pos == 0: print(">> " + loop_line[comment_pos+1:])
                         loop_line = loop_line[:comment_pos].strip()
-                    if loop_line == 'LOOP END':
-                        break
-                    elif loop_line:
-                        loop_commands.append(loop_line)
+                    if loop_line == 'LOOP END': break
+                    elif loop_line: loop_commands.append(loop_line)
                     i += 1
                 if i >= len(lines) and (i == 0 or lines[i-1].strip() != 'LOOP END'):
                      raise ValueError("LOOP END not found")
                 print(f">> Starting loop with {iteration_count} iterations")
                 for iteration in range(iteration_count):
                     print(f">> Iteration {iteration + 1}/{iteration_count}")
-                    for cmd in loop_commands:
-                        yield cmd
+                    for cmd in loop_commands: yield cmd
                 print(">> Loop completed")
-            except (ValueError, IndexError) as e:
-                print(f"Error in loop syntax: {e}")
-        else:
-            yield line
+            except (ValueError, IndexError) as e: print(f"Error in loop syntax: {e}")
+        else: yield line
         i += 1
 
 class VirtualPort:
     def __init__(self):
-        self.is_open = True
-        self._buffer = b''
+        self.is_open, self._buffer = True, b''
     def write(self, data):
-        # Simulate C code output
-        if data.startswith(b'R-'):
-            parts = data.strip().split(b'-')
-            addr_str, count = parts[1].decode(), int(parts[2])
+        if data.startswith(b'R-A00080A4'): self._buffer += b'Reading 4 bytes from address 0xA00080A4:\r\n00 08 00 14 \r\n>\r\n'
+        elif data.startswith(b'R-A00088A8'): self._buffer += b'Reading 4 bytes from address 0xA00088A8:\r\n00 0B 00 00 \r\n>\r\n'
+        elif data.startswith(b'R-'):
+            parts = data.strip().split(b'-'); addr_str, count = parts[1].decode(), int(parts[2])
             self._buffer += f"Reading {count} bytes from address 0x{addr_str}:\r\n".encode()
-            for i in range(count):
-                self._buffer += f"{0xAA+i:02X} ".encode()
-                if (i + 1) % 16 == 0: self._buffer += b"\r\n"
+            for i in range(count): self._buffer += f"{0xAA+i:02X} ".encode()
+            if (i + 1) % 16 == 0: self._buffer += b"\r\n"
             self._buffer += b"\r\n>\r\n"
         elif data.startswith(b'W-'):
-            parts = data.strip().split(b'-')
-            addr_str = parts[1].decode()
-            byte_count = len(parts) - 2
+            parts = data.strip().split(b'-'); addr_str, byte_count = parts[1].decode(), len(parts) - 2
             self._buffer += f"Writing {byte_count} bytes to address 0x{addr_str}\r\nOK\r\n>\r\n".encode()
-        elif data.strip() == b'V':
-            self._buffer += b'VirtualPort v1.0\r\n>\r\n'
-        else:
-            self._buffer += b'OK\r\n>\r\n'
+        elif data.strip() == b'V': self._buffer += b'VirtualPort v1.0\r\n>\r\n'
+        else: self._buffer += b'OK\r\n>\r\n'
     def read(self, size=1):
         if not self._buffer: return b''
         result = self._buffer[:size]; self._buffer = self._buffer[size:]; return result
@@ -103,11 +151,8 @@ class SerialCommandSender:
             print("Using VirtualPort for testing")
             self.ser = VirtualPort()
         else:
-            try:
-                self.ser = serial.Serial(port=port, baudrate=baudrate, timeout=timeout, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE)
-            except serial.SerialException as e:
-                print(f"Error opening serial port {port}: {e}"); sys.exit(1)
-
+            try: self.ser = serial.Serial(port=port, baudrate=baudrate, timeout=timeout, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE)
+            except serial.SerialException as e: print(f"Error opening serial port {port}: {e}"); sys.exit(1)
     def get_response(self):
         response = ""
         while True:
@@ -117,126 +162,110 @@ class SerialCommandSender:
                 response += char
             time.sleep(0.0001)
         return response.strip()
-
     def send_command(self, command):
         command_to_send = command.replace(' ', '-') + '\r\n'
         print(f">> {command}")
         self.ser.write(command_to_send.encode())
         return self.get_response()
-
+    def read_single_register(self, address):
+        """Reads 4 bytes from an address and returns a single 32-bit integer."""
+        command = f"R {address} 4"
+        response_text = self.send_command(command)
+        hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', response_text)
+        if len(hex_bytes) >= 4:
+            word_str = "".join(hex_bytes[:4])
+            return int(word_str, 16)
+        return None
     def _parse_and_decode_read_response(self, response_text, base_address_str):
         base_addr_int = int(base_address_str, 16)
         hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', response_text)
-        if not hex_bytes:
-            print("No data found in serial response to parse.")
-            return
+        if not hex_bytes: print("No data found in serial response to parse."); return
         for i in range(0, len(hex_bytes), 4):
             chunk = hex_bytes[i:i+4]
             if len(chunk) < 4: continue
-            word_str = "".join(chunk)
-            word_int = int(word_str, 16)
-            word_addr = base_addr_int + i
+            word_str, word_int, word_addr = "".join(chunk), int("".join(chunk), 16), base_addr_int + i
             self.decoder.decode(word_addr, word_int, do_print=True)
-
     def process_file(self, filename):
         try:
-            with open(filename, 'r') as file:
-                lines = file.readlines()
+            with open(filename, 'r') as file: lines = file.readlines()
             for command in parse_file_commands(lines):
                 response = self.send_command(command)
-                
                 if command.startswith('R ') and self.decoder:
-                    base_address_str = command.split()[1]
-                    self._parse_and_decode_read_response(response, base_address_str)
+                    self._parse_and_decode_read_response(response, command.split()[1])
                 elif command.startswith('W ') and self.decoder:
-                    parts = command.split()
-                    base_addr_str = parts[1]
-                    byte_payload = parts[2:]
-                    base_addr_int = int(base_addr_str, 16)
-                    print(f"Parsing Write Payload for Base Address: {base_addr_str}")
+                    parts, byte_payload = command.split(), command.split()[2:]
+                    base_addr_int = int(parts[1], 16)
+                    print(f"Parsing Write Payload for Base Address: {parts[1]}")
                     for i in range(0, len(byte_payload), 4):
                         chunk = byte_payload[i:i+4]
                         if len(chunk) < 4: continue
-                        word_str = "".join(chunk)
-                        word_int = int(word_str, 16)
-                        word_addr = base_addr_int + i
+                        word_int, word_addr = int("".join(chunk), 16), base_addr_int + i
                         self.decoder.decode(word_addr, word_int, do_print=True)
                     print(response + "\n")
-                else:
-                    print(response + "\n")
-        except Exception as e:
-            print(f"Error during serial processing: {e}")
-
+                else: print(response + "\n")
+        except Exception as e: print(f"Error during serial processing: {e}")
     def close(self):
         if self.ser.is_open: self.ser.close()
 
 class ReadRegisterInterface:
     def __init__(self, base_url, decoder=None):
-        self.base_url = base_url
-        self.decoder = decoder
-
+        self.base_url, self.decoder = base_url, decoder
     def read(self, address, count):
         query = urlencode({"address": address, "count": count})
         url = f"{self.base_url}/register/read?{query}"
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            print(f"Error sending request: {e}"); return
-        data = response.content
-        message = memory_pb2.MemoryResponse()
-        try:
-            message.ParseFromString(data)
-        except Exception as e:
-            print(f"Error decoding protobuf: {e}"); return
+        try: response = requests.get(url); response.raise_for_status()
+        except requests.exceptions.RequestException as e: print(f"Error sending request: {e}"); return
+        data, message = response.content, memory_pb2.MemoryResponse()
+        try: message.ParseFromString(data)
+        except Exception as e: print(f"Error decoding protobuf: {e}"); return
         for i, value in enumerate(message.register_interface.result[: int(count)]):
             addr_offset = message.register_interface.address + (i * 4)
-            if self.decoder:
-                self.decoder.decode(addr_offset, value, do_print=True)
-            else:
-                print(f"0x{addr_offset:08X}: 0x{value:08X}")
-
+            if self.decoder: self.decoder.decode(addr_offset, value, do_print=True)
+            else: print(f"0x{addr_offset:08X}: 0x{value:08X}")
+    def read_single_register(self, address):
+        """Reads a single 32-bit register and returns it as an integer."""
+        query = urlencode({"address": address, "count": 1})
+        url = f"{self.base_url}/register/read?{query}"
+        try: response = requests.get(url); response.raise_for_status()
+        except requests.exceptions.RequestException: return None
+        data, message = response.content, memory_pb2.MemoryResponse()
+        try:
+            message.ParseFromString(data)
+            if message.register_interface.result: return message.register_interface.result[0]
+        except Exception: return None
+        return None
     def write(self, address, payload):
-        count = len(payload)
-        payload = payload + [0] * (64 - count)
+        count = len(payload); payload = payload + [0] * (64 - count)
         register_interface = register_pb2.RegisterInterface(handshake=0, address=int(address, 16), count=int(count), payload=payload, result=[], operation=register_pb2.RegisterOperation.RO_WRITE)
         url = f"{self.base_url}/register/write"
         try:
             response = requests.post(url, data=register_interface.SerializeToString(), headers={"Content-Type": "application/octet-stream"}, timeout=10)
             response.raise_for_status()
         except requests.exceptions.RequestException as e: print(f"Error sending request: {e}"); return
-        data = response.content
-        message = memory_pb2.MemoryResponse()
+        data, message = response.content, memory_pb2.MemoryResponse()
         try: message.ParseFromString(data)
         except Exception as e: print(f"Error decoding protobuf: {e}"); return
 
 class CommandParsing:
     pattern = r"^\s*([RW])\s+([0-9A-Fa-f]+)\s+(.*)$"
-
     def __init__(self, ip=None, decoder=None):
         if not ip.startswith('http'): self.ip = f"http://{ip}"
         else: self.ip = ip
         self.reg_interface = ReadRegisterInterface(self.ip, decoder=decoder)
-
     def parse(self, lines):
         for command_line in parse_file_commands(lines):
             if command_line.startswith('D '):
                 try:
-                    milliseconds = int(command_line.split()[1])
-                    seconds = milliseconds / 1000.0
-                    print(f">> Delaying for {milliseconds} milliseconds...")
-                    time.sleep(seconds)
-                except (ValueError, IndexError):
-                    print(f"Error: Invalid delay format: '{command_line}'.")
+                    milliseconds, seconds = int(command_line.split()[1]), int(command_line.split()[1]) / 1000.0
+                    print(f">> Delaying for {milliseconds} milliseconds..."); time.sleep(seconds)
+                except (ValueError, IndexError): print(f"Error: Invalid delay format: '{command_line}'.")
                 continue 
             match = re.match(self.pattern, command_line)
             if match:
                 operation, address, payload_str = match.groups()
                 if operation == 'R':
                     count = int(payload_str.strip()) // 4
-                    print(f">> Reading: address={address}, count={count}")
-                    self.reg_interface.read(address, count)
-                    print()
+                    print(f">> Reading: address={address}, count={count}"); self.reg_interface.read(address, count); print()
                 elif operation == 'W':
                     payload_parts = payload_str.strip().split()
                     if not payload_parts: print(f"Error: Write command has no payload: '{command_line}'"); continue
@@ -262,8 +291,7 @@ class CommandParsing:
                         self.reg_interface.write(address, payload)
                     except ValueError as e: print(f"Error processing write command: '{command_line}'\n  -> {e}"); continue
                     print()
-            else:
-                print(f"Skipping non-matching command: '{command_line}'")
+            else: print(f"Skipping non-matching command: '{command_line}'")
 
 def main():
     parser = argparse.ArgumentParser(description="Send commands to a device via Serial or HTTP.", formatter_class=argparse.RawTextHelpFormatter)
@@ -276,24 +304,18 @@ def main():
     parser.add_argument("--mc-version", help="Specify an exact MC version to use (e.g., '0.8.0').")
     parser.add_argument("--lc-version", help="Specify an exact LC version to use (e.g., '0.11.0').")
     args = parser.parse_args()
-
-    if not os.path.isfile(args.filename):
-        print(f"Error: File '{args.filename}' not found."); sys.exit(1)
-
+    if not os.path.isfile(args.filename): print(f"Error: File '{args.filename}' not found."); sys.exit(1)
     print("IO Tool Serial & HTTP - v1.0")
 
+    search_dir = args.dir
+    mc_file = os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.xlsx") if args.mc_version else find_latest_file("QBgMap_MC_", search_dir)
+    lc_file = os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.xlsx") if args.lc_version else find_latest_file("QBgMap_LC_", search_dir)
+    
     decoder = None
     if args.parse:
-        if not DECODER_AVAILABLE:
-            print("\nWARNING: Register parsing disabled because 'parse_register.py' could not be imported.\n")
-        else:
-            search_dir = args.dir
-            mc_file = os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.xlsx") if args.mc_version else find_latest_file("QBgMap_MC_", search_dir)
-            lc_file = os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.xlsx") if args.lc_version else find_latest_file("QBgMap_LC_", search_dir)
-            if not mc_file or not lc_file:
-                print("\nWARNING: Register parsing disabled. Could not find required MC/LC register map files.\n")
-            else:
-                decoder = RegisterDecoder(mc_file_path=mc_file, lc_file_path=lc_file)
+        if not DECODER_AVAILABLE: print("\nWARNING: Register parsing disabled. 'parse_register.py' could not be imported.\n")
+        elif not mc_file or not lc_file: print("\nWARNING: Register parsing disabled. Could not find required MC/LC register map files.\n")
+        else: decoder = RegisterDecoder(mc_file_path=mc_file, lc_file_path=lc_file)
     print()
 
     if args.mode == 'serial':
@@ -302,22 +324,20 @@ def main():
         sender = None
         try:
             sender = SerialCommandSender(args.port, decoder=decoder)
-            sender.send_command('V')
+            perform_version_check(sender, mc_file, lc_file)
             sender.process_file(args.filename)
         except Exception as e: print(f"An error occurred during serial execution: {e}")
         finally:
             if sender: sender.close()
         print("Serial mode finished.")
-
     elif args.mode == 'http':
         print(f"Running in HTTP mode (File: {args.filename}, IP: {args.ip})")
         try:
-            with open(args.filename, 'r') as f:
-                lines = f.readlines()
+            with open(args.filename, 'r') as f: lines = f.readlines()
             parser_obj = CommandParsing(ip=args.ip, decoder=decoder)
+            perform_version_check(parser_obj.reg_interface, mc_file, lc_file)
             parser_obj.parse(lines)
-        except Exception as e:
-            print(f"An error occurred during HTTP execution: {e}")
+        except Exception as e: print(f"An error occurred during HTTP execution: {e}")
         print("HTTP mode finished.")
 
 if __name__ == "__main__":
