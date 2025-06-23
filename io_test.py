@@ -16,7 +16,6 @@ try:
 except ImportError:
     DECODER_AVAILABLE = False
 
-# Helper function for the version check
 def _print_warning_banner(messages):
     """Prints a highly visible warning banner."""
     print("\n" + "*" * 80)
@@ -26,14 +25,12 @@ def _print_warning_banner(messages):
     print("*" + " " * 78 + "*")
     print("*" * 80 + "\n")
 
-# The main version checking logic
 def perform_version_check(comm_interface, mc_filepath, lc_filepath):
     """
     Reads hardware revision registers and compares them against register map file versions.
     """
     print("Performing hardware and file version integrity check...")
     
-    # 1. Extract versions from filenames
     mc_match = re.search(r'(\d+)\.(\d+)\.(\d+)', os.path.basename(mc_filepath))
     lc_match = re.search(r'(\d+)\.(\d+)\.(\d+)', os.path.basename(lc_filepath))
     
@@ -44,16 +41,13 @@ def perform_version_check(comm_interface, mc_filepath, lc_filepath):
     mc_file_ver = tuple(map(int, mc_match.groups()))
     lc_file_ver = tuple(map(int, lc_match.groups()))
 
-    # 2. Check MC Version
     mc_hw_val = comm_interface.read_single_register("A00080A4")
     if mc_hw_val is None:
         print("WARNING: Failed to read MC hardware revision register. Skipping check.")
     elif mc_hw_val == 0:
         print("WARNING: MC hardware revision is 0x0. Device may be uninitialized. Skipping check.")
     else:
-        hw_major = (mc_hw_val >> 24) & 0xFF
-        hw_minor = (mc_hw_val >> 16) & 0xFF
-        hw_patch = (mc_hw_val >> 8) & 0xFF
+        hw_major, hw_minor, hw_patch = (mc_hw_val >> 24) & 0xFF, (mc_hw_val >> 16) & 0xFF, (mc_hw_val >> 8) & 0xFF
         mc_hw_ver = (hw_major, hw_minor, hw_patch)
         if mc_hw_ver != mc_file_ver:
             _print_warning_banner([
@@ -63,16 +57,13 @@ def perform_version_check(comm_interface, mc_filepath, lc_filepath):
                 "Parsing results may be incorrect."
             ])
 
-    # 3. Check LC Version
     lc_hw_val = comm_interface.read_single_register("A00088A8")
     if lc_hw_val is None:
         print("WARNING: Failed to read LC hardware revision register. Skipping check.")
     elif lc_hw_val == 0:
         print("WARNING: LC hardware revision is 0x0. Device may be uninitialized. Skipping check.")
     else:
-        hw_major = (lc_hw_val >> 24) & 0xFF
-        hw_minor = (lc_hw_val >> 16) & 0xFF
-        hw_patch = (lc_hw_val >> 8) & 0xFF
+        hw_major, hw_minor, hw_patch = (lc_hw_val >> 24) & 0xFF, (lc_hw_val >> 16) & 0xFF, (lc_hw_val >> 8) & 0xFF
         lc_hw_ver = (hw_major, hw_minor, hw_patch)
         if lc_hw_ver != lc_file_ver:
             _print_warning_banner([
@@ -168,7 +159,6 @@ class SerialCommandSender:
         self.ser.write(command_to_send.encode())
         return self.get_response()
     def read_single_register(self, address):
-        """Reads 4 bytes from an address and returns a single 32-bit integer."""
         command = f"R {address} 4"
         response_text = self.send_command(command)
         hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', response_text)
@@ -183,7 +173,7 @@ class SerialCommandSender:
         for i in range(0, len(hex_bytes), 4):
             chunk = hex_bytes[i:i+4]
             if len(chunk) < 4: continue
-            word_str, word_int, word_addr = "".join(chunk), int("".join(chunk), 16), base_addr_int + i
+            word_int, word_addr = int("".join(chunk), 16), base_addr_int + i
             self.decoder.decode(word_addr, word_int, do_print=True)
     def process_file(self, filename):
         try:
@@ -223,7 +213,6 @@ class ReadRegisterInterface:
             if self.decoder: self.decoder.decode(addr_offset, value, do_print=True)
             else: print(f"0x{addr_offset:08X}: 0x{value:08X}")
     def read_single_register(self, address):
-        """Reads a single 32-bit register and returns it as an integer."""
         query = urlencode({"address": address, "count": 1})
         url = f"{self.base_url}/register/read?{query}"
         try: response = requests.get(url); response.raise_for_status()
@@ -294,51 +283,100 @@ class CommandParsing:
             else: print(f"Skipping non-matching command: '{command_line}'")
 
 def main():
-    parser = argparse.ArgumentParser(description="Send commands to a device via Serial or HTTP.", formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("filename", help="Path to the command file to execute.")
-    parser.add_argument("--mode", choices=['serial', 'http'], default='http', help="Execution mode (default: http).")
+    parser = argparse.ArgumentParser(description="A versatile tool for device communication and offline log decoding.", formatter_class=argparse.RawTextHelpFormatter)
+    
+    # Mode selection
+    parser.add_argument("--mode", choices=['serial', 'http', 'decode'], default='http', 
+                        help="Execution mode:\n"
+                             "'serial': Send commands from a file to a COM port.\n"
+                             "'http': Send commands from a file over HTTP.\n"
+                             "'decode': Decode a local file of register data without device connection.\n"
+                             "(default: http)")
+    
+    # File inputs
+    parser.add_argument("--command-file", help="Path to the command file to execute (for serial/http modes).")
+    parser.add_argument("--input-file", help="Path to a data file with addr/value pairs to decode (for decode mode).")
+    
+    # Connection settings
     parser.add_argument("--ip", default='192.168.0.59:7124', help="IP address and port for HTTP mode.")
     parser.add_argument("--port", default='COM3', help="COM port for serial mode.")
-    parser.add_argument('--parse', action='store_true', help="Enable register value parsing and bit-field decoding (default: disabled).")
-    parser.add_argument("--dir", default=".", help="Directory to search for register map files (default: current directory).")
+    
+    # Parsing and version control
+    parser.add_argument('--parse', action='store_true', help="Enable register value parsing and bit-field decoding (for serial/http modes).")
+    parser.add_argument("--dir", default=".", help="Directory to search for register map files.")
     parser.add_argument("--mc-version", help="Specify an exact MC version to use (e.g., '0.8.0').")
     parser.add_argument("--lc-version", help="Specify an exact LC version to use (e.g., '0.11.0').")
-    args = parser.parse_args()
-    if not os.path.isfile(args.filename): print(f"Error: File '{args.filename}' not found."); sys.exit(1)
-    print("IO Tool Serial & HTTP - v1.0")
-
-    search_dir = args.dir
-    mc_file = os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.xlsx") if args.mc_version else find_latest_file("QBgMap_MC_", search_dir)
-    lc_file = os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.xlsx") if args.lc_version else find_latest_file("QBgMap_LC_", search_dir)
     
+    args = parser.parse_args()
+
+    # Validate arguments based on mode
+    if args.mode in ['serial', 'http'] and not args.command_file:
+        parser.error("--command-file is required for serial and http modes.")
+    if args.mode == 'decode' and not args.input_file:
+        parser.error("--input-file is required for decode mode.")
+    
+    print("IO Tool - v2.0")
+
+    # Decoder setup is common for all modes that need it
+    parsing_is_enabled = args.parse or (args.mode == 'decode')
     decoder = None
-    if args.parse:
-        if not DECODER_AVAILABLE: print("\nWARNING: Register parsing disabled. 'parse_register.py' could not be imported.\n")
-        elif not mc_file or not lc_file: print("\nWARNING: Register parsing disabled. Could not find required MC/LC register map files.\n")
-        else: decoder = RegisterDecoder(mc_file_path=mc_file, lc_file_path=lc_file)
-    print()
+    mc_file, lc_file = None, None
+    if parsing_is_enabled:
+        if not DECODER_AVAILABLE:
+            print("\nWARNING: Parsing is disabled because 'parse_register.py' could not be imported.\n")
+        else:
+            search_dir = args.dir
+            mc_file = os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.xlsx") if args.mc_version else find_latest_file("QBgMap_MC_", search_dir)
+            lc_file = os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.xlsx") if args.lc_version else find_latest_file("QBgMap_LC_", search_dir)
+            if not mc_file or not lc_file:
+                print("\nWARNING: Parsing is disabled. Could not find required MC/LC register map files.\n")
+            else:
+                decoder = RegisterDecoder(mc_file_path=mc_file, lc_file_path=lc_file)
+    
+    print() # Newline for cleaner output start
 
     if args.mode == 'serial':
-        print(f"Running in SERIAL mode (File: {args.filename}, Port: {args.port})")
+        print(f"Running in SERIAL mode (File: {args.command_file}, Port: {args.port})")
         print()
         sender = None
         try:
             sender = SerialCommandSender(args.port, decoder=decoder)
-            perform_version_check(sender, mc_file, lc_file)
-            sender.process_file(args.filename)
+            if mc_file and lc_file: perform_version_check(sender, mc_file, lc_file)
+            sender.process_file(args.command_file)
         except Exception as e: print(f"An error occurred during serial execution: {e}")
         finally:
             if sender: sender.close()
         print("Serial mode finished.")
+
     elif args.mode == 'http':
-        print(f"Running in HTTP mode (File: {args.filename}, IP: {args.ip})")
+        print(f"Running in HTTP mode (File: {args.command_file}, IP: {args.ip})")
+        print()
         try:
-            with open(args.filename, 'r') as f: lines = f.readlines()
+            with open(args.command_file, 'r') as f: lines = f.readlines()
             parser_obj = CommandParsing(ip=args.ip, decoder=decoder)
-            perform_version_check(parser_obj.reg_interface, mc_file, lc_file)
+            if mc_file and lc_file: perform_version_check(parser_obj.reg_interface, mc_file, lc_file)
             parser_obj.parse(lines)
         except Exception as e: print(f"An error occurred during HTTP execution: {e}")
         print("HTTP mode finished.")
+
+    elif args.mode == 'decode':
+        print(f"Running in DECODE-ONLY mode (Input File: {args.input_file})")
+        print()
+        if not decoder:
+            print("Error: Parsing is required for decode mode, but the decoder could not be initialized.")
+            print("Please ensure 'parse_register.py' and the required register map files are available.")
+            sys.exit(1)
+        
+        line_pattern = re.compile(r"^(0x[0-9a-fA-F]+)[\s:]+(0x[0-9a-fA-F]+)")
+        try:
+            with open(args.input_file, 'r') as f:
+                for line in f:
+                    match = line_pattern.match(line.strip())
+                    if match:
+                        decoder.decode(match.group(1), match.group(2), do_print=True)
+        except FileNotFoundError:
+            print(f"Error: Input file not found: {args.input_file}"); sys.exit(1)
+        print("Decode-only mode finished.")
 
 if __name__ == "__main__":
     main()
