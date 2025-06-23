@@ -198,9 +198,20 @@ class CommandParsing:
                             for i in range(0, len(payload_parts), 4):
                                 chunk = payload_parts[i:i+4]; full_hex_string = "".join(chunk); payload.append(int(full_hex_string, 16))
                         else: raise ValueError("Payload must be space-separated 8-char words OR 2-char bytes.")
-                        hex_values_str = ', '.join([f"0x{v:08X}" for v in payload])
-                        print(f"Writing: address={address}, values=[{hex_values_str}]")
+
+                        # Conditional parsing for write operation
+                        if self.reg_interface.decoder:
+                            print(f">> Writing Parsed Payload to Base Address: {address}")
+                            base_addr_int = int(address, 16)
+                            for i, word in enumerate(payload):
+                                word_addr = base_addr_int + (i * 4)
+                                self.reg_interface.decoder.decode(word_addr, word, do_print=True)
+                        else:
+                            hex_values_str = ', '.join([f"0x{v:08X}" for v in payload])
+                            print(f"Writing: address={address}, values=[{hex_values_str}]")
+                        
                         self.reg_interface.write(address, payload)
+
                     except ValueError as e: print(f"Error processing write command: '{command_line}'\n  -> {e}"); continue
                     print()
             else:
@@ -212,10 +223,7 @@ def main():
     parser.add_argument("--mode", choices=['serial', 'http'], default='http', help="Execution mode (default: http).")
     parser.add_argument("--ip", default='192.168.0.59:7124', help="IP address and port for HTTP mode.")
     parser.add_argument("--port", default='COM3', help="COM port for serial mode.")
-    
-    # Updated argument for parsing
     parser.add_argument('--parse', action='store_true', help="Enable register value parsing and bit-field decoding (default: disabled).")
-    
     parser.add_argument("--dir", default=".", help="Directory to search for register map files (default: current directory).")
     parser.add_argument("--mc-version", help="Specify an exact MC version to use (e.g., '0.8.0').")
     parser.add_argument("--lc-version", help="Specify an exact LC version to use (e.g., '0.11.0').")
@@ -243,7 +251,6 @@ def main():
         print(f"Running in HTTP mode (File: {args.filename}, IP: {args.ip})")
         
         decoder = None
-        # Updated logic to be "opt-in"
         if args.parse:
             if not DECODER_AVAILABLE:
                 print("\nWARNING: Register parsing disabled because 'parse_register.py' could not be imported.\n")
