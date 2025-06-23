@@ -71,16 +71,20 @@ class VirtualPort:
         self.is_open = True
         self._buffer = b''
     def write(self, data):
-        # Simulate C code output for R command
+        # Simulate C code output
         if data.startswith(b'R-'):
             parts = data.strip().split(b'-')
-            addr_str = parts[1].decode()
-            count = int(parts[2])
+            addr_str, count = parts[1].decode(), int(parts[2])
             self._buffer += f"Reading {count} bytes from address 0x{addr_str}:\r\n".encode()
             for i in range(count):
                 self._buffer += f"{0xAA+i:02X} ".encode()
                 if (i + 1) % 16 == 0: self._buffer += b"\r\n"
             self._buffer += b"\r\n>\r\n"
+        elif data.startswith(b'W-'):
+            parts = data.strip().split(b'-')
+            addr_str = parts[1].decode()
+            byte_count = len(parts) - 2
+            self._buffer += f"Writing {byte_count} bytes to address 0x{addr_str}\r\nOK\r\n>\r\n".encode()
         elif data.strip() == b'V':
             self._buffer += b'VirtualPort v1.0\r\n>\r\n'
         else:
@@ -122,23 +126,16 @@ class SerialCommandSender:
 
     def _parse_and_decode_read_response(self, response_text, base_address_str):
         base_addr_int = int(base_address_str, 16)
-        # Find all 2-character hex strings in the response
         hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', response_text)
-        
         if not hex_bytes:
             print("No data found in serial response to parse.")
             return
-
-        # Group bytes into 32-bit words
         for i in range(0, len(hex_bytes), 4):
             chunk = hex_bytes[i:i+4]
-            if len(chunk) < 4: continue # Skip incomplete words
-            
-            # The C code prints big-endian, so we assemble it that way
+            if len(chunk) < 4: continue
             word_str = "".join(chunk)
             word_int = int(word_str, 16)
             word_addr = base_addr_int + i
-            
             self.decoder.decode(word_addr, word_int, do_print=True)
 
     def process_file(self, filename):
@@ -148,12 +145,24 @@ class SerialCommandSender:
             for command in parse_file_commands(lines):
                 response = self.send_command(command)
                 
-                # If it's a read command and parsing is enabled, process the response
                 if command.startswith('R ') and self.decoder:
                     base_address_str = command.split()[1]
                     self._parse_and_decode_read_response(response, base_address_str)
+                elif command.startswith('W ') and self.decoder:
+                    parts = command.split()
+                    base_addr_str = parts[1]
+                    byte_payload = parts[2:]
+                    base_addr_int = int(base_addr_str, 16)
+                    print(f"Parsing Write Payload for Base Address: {base_addr_str}")
+                    for i in range(0, len(byte_payload), 4):
+                        chunk = byte_payload[i:i+4]
+                        if len(chunk) < 4: continue
+                        word_str = "".join(chunk)
+                        word_int = int(word_str, 16)
+                        word_addr = base_addr_int + i
+                        self.decoder.decode(word_addr, word_int, do_print=True)
+                    print(response + "\n")
                 else:
-                    # Otherwise, just print the raw response
                     print(response + "\n")
         except Exception as e:
             print(f"Error during serial processing: {e}")
@@ -292,7 +301,6 @@ def main():
         print()
         sender = None
         try:
-            # Pass the decoder instance to the sender
             sender = SerialCommandSender(args.port, decoder=decoder)
             sender.send_command('V')
             sender.process_file(args.filename)
@@ -306,7 +314,6 @@ def main():
         try:
             with open(args.filename, 'r') as f:
                 lines = f.readlines()
-            # Pass the decoder instance to the command parser
             parser_obj = CommandParsing(ip=args.ip, decoder=decoder)
             parser_obj.parse(lines)
         except Exception as e:
