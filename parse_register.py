@@ -90,7 +90,8 @@ class RegisterDecoder:
                     'slice': slice_str,
                     'hex_value': f"0x{field_value_int:X}",
                     'interpreted_value': interpreted_value,
-                    'format': data_format
+                    'format': data_format,
+                    'register_name': field_data.get('register_name', 'N/A')
                 })
             except (ValueError, IndexError):
                 continue
@@ -104,10 +105,12 @@ class RegisterDecoder:
         """Private helper to handle the console printing."""
         title = f"{block_info['name']}: {description}"
         prefix = block_info.get('prefix', '')
+        register_name = decoded_fields[0].get('register_name', 'N/A')
 
         print("-" * 80)
         print(f"{title} (Address: {address_str.upper()})")
         print(f"Input Value: 0x{value_int:08X} ({value_int})")
+        print(f"Register: {register_name}")
         print("-" * 80)
         print(f"{'Label':<35} {'Slice':<10} {'Value (Hex)':<15} {'Interpreted Value':<17}")
         print(f"{'-'*35:<35} {'-'*10:<10} {'-'*15:<15} {'-'*17}")
@@ -124,21 +127,17 @@ class RegisterDecoder:
             if '.' not in display_str and 'e' not in display_str.lower():
                 display_str += ".0"
             return display_str
-        if isinstance(value, str) and value.endswith("(non-32-bit)"):
-            return value
         return str(value)
 
     def _find_address_context(self, address_int: int) -> Tuple[Optional[str], Optional[dict], Optional[str]]:
         for block in self.mc_mem_map:
             if block['start_addr'] <= address_int <= block['end_addr']:
                 map_to_use = block['map_to_use']
-                if map_to_use == 'MC':
-                    return f"{address_int:X}", block, 'MC'
+                if map_to_use == 'MC': return f"{address_int:X}", block, 'MC'
                 elif map_to_use == 'LC':
                     relative_offset = address_int - block['start_addr']
                     lc_base = 0xA0008000 if (address_int & 0x8000) else 0xA0000000
-                    lc_lookup_addr = lc_base + relative_offset
-                    return f"{lc_lookup_addr:X}", block, 'LC'
+                    return f"{lc_base + relative_offset:X}", block, 'LC'
         return None, None, None
 
     @staticmethod
@@ -160,7 +159,7 @@ class RegisterDecoder:
 
     @staticmethod
     def _load_register_map(excel_path: str) -> Dict[str, List[Dict[str, str]]]:
-        register_map, REQUIRED_COLUMNS = {}, ['IO_Tool_Addr', 'RegDescription', 'posslice', 'Label', 'RegSize']
+        register_map, REQUIRED_COLUMNS = {}, ['IO_Tool_Addr', 'RegDescription', 'Instance', 'Register', 'posslice', 'Label', 'RegSize']
         try:
             df = pd.read_excel(excel_path, sheet_name=0, dtype=str).fillna('')
             if not all(col in df.columns for col in REQUIRED_COLUMNS):
@@ -176,7 +175,13 @@ class RegisterDecoder:
                 for i in range(reg_size):
                     offset_addr_str = f"{base_addr_int + (i * 4):X}"
                     instance_label = f"{original_label}_{i + 1}" if reg_size > 1 else original_label
-                    field_info = {'description': row.get('RegDescription', '').strip(), 'slice': row.get('posslice', '').strip(), 'label': instance_label, 'format': data_format}
+                    field_info = {
+                        'description': row.get('RegDescription', '').strip(),
+                        'slice': row.get('posslice', '').strip(),
+                        'label': instance_label,
+                        'format': data_format,
+                        'register_name': row.get('Instance', '').strip() + "_" + row.get('Register', '').strip()
+                    }
                     if offset_addr_str not in register_map: register_map[offset_addr_str] = []
                     if field_info not in register_map[offset_addr_str]: register_map[offset_addr_str].append(field_info)
         except FileNotFoundError: print(f"Error: The file '{excel_path}' was not found.", file=sys.stderr); sys.exit(1)
