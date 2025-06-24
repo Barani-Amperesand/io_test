@@ -1,24 +1,26 @@
-# IO Tool: Serial & HTTP Command Sender (`io_test.py`)
+# BitWise: Device Interaction & Register Decoding Tool (`bitwise.py`)
 
 ## 1. Overview
 
-This script is a versatile command-line utility for interacting with hardware devices. It provides two primary modes of operation:
+**BitWise** is a powerful, versatile command-line utility for interacting with hardware devices and analyzing data. It supports three primary modes of operation, determined automatically by the arguments you provide:
 
-1.  **HTTP Mode:** Sends structured Read/Write commands to a device's REST API endpoint. This mode uses pre-compiled Protocol Buffer (Protobuf) files for reliable data communication.
-2.  **Serial Mode:** Sends general-purpose string commands to a device over a standard serial (COM) port.
+1.  **HTTP Mode:** Sends structured Read/Write commands to a device's REST API endpoint. This mode uses Protocol Buffers for reliable communication.
+2.  **Serial Mode:** Sends string-based commands to a device over a standard serial (COM) port.
+3.  **Decode Mode:** Parses and decodes local log files containing address-value pairs, providing human-readable bit-field analysis without needing a device connection.
 
-The script reads commands from a text file, allowing for complex, repeatable, and automated testing or configuration sequences. It supports advanced scripting features like loops, delays, and comments.
+By default, BitWise automatically parses register data for HTTP and Serial modes, providing detailed bit-field decoding on-the-fly. It reads commands from a text file, allowing for complex, repeatable, and automated testing or configuration sequences with advanced features like loops, delays, and comments.
 
 ## 2. Key Features
 
-*   **Dual-Mode Operation:** Seamlessly switch between HTTP and Serial communication.
+*   **Multi-Mode Operation:** Seamlessly use HTTP, Serial, or offline Decode modes.
+*   **Automatic Mode Detection:** The script intelligently selects the mode based on your command-line flags (`--ip`, `--port`, or `--file`).
+*   **Intelligent Register Parsing (Default):** Automatically decodes register values into human-readable bit-fields using Excel-based register maps. An opt-out flag (`--no-parse`) is available for raw output.
+*   **Offline Log File Decoding:** Analyze captured data logs to debug issues without connecting to live hardware.
+*   **Hardware Version Verification:** Compares register map versions against hardware-reported versions to prevent data misinterpretation.
 *   **Command File Processing:** Execute a series of commands from an input text file.
-*   **Looping Construct:** Use `LOOP <count> ... LOOP END` to repeat a block of commands.
-*   **HTTP-Specific Delays:** Use `D <milliseconds>` to pause execution, perfect for waiting for hardware operations to complete.
-*   **Rich Commenting:** Supports both full-line (`#`) and in-line comments for well-documented command files.
-*   **Intelligent HTTP Write Payloads:** Accepts data in multiple convenient formats (e.g., space-separated bytes or full 32-bit words).
-*   **Robust Command-Line Interface:** Uses clear and flexible arguments to control script execution.
-*   **Simplified Setup:** Comes with all necessary Protobuf definitions, requiring no compilation by the user.
+*   **Advanced Scripting:** Use `LOOP` and `D` (delay) commands to create sophisticated test sequences.
+*   **Centralized Device Configuration:** Use an optional `devices.json` file to manage connection details for multiple devices with easy-to-remember names.
+*   **Flexible Write Payloads:** Accepts data in multiple formats (e.g., space-separated bytes or full 32-bit words).
 
 ## 3. Setup
 
@@ -28,171 +30,131 @@ The script reads commands from a text file, allowing for complex, repeatable, an
 
 ### 3.2. File Structure
 
-To run the script, ensure all the required files are located in the **same directory**. The pre-compiled Protobuf files (`_pb2.py`) must be present alongside the main script.
-
-Your directory should look like this:
+To run the script with all features, your project directory should be organized as follows. The `bitwise.py` script, `_pb2.py` files, and `parse_register.py` must be in the same directory.
 
 ```
 your_project/
-├── io_test.py                # The main script
+├── bitwise.py                # The main script
+├── devices.json              # (Optional) For storing device IP addresses
+│
+├── parse_register.py         # Required for all parsing features
 ├── memory_pb2.py             # Required Protobuf file
 ├── register_pb2.py           # Required Protobuf file
-├── nanopb_pb2.py             # Required Protobuf file
-└── control_inputs_pb2.py     # Required Protobuf file
 # ... and any other necessary _pb2.py files
+│
+└── register_maps/            # (Recommended) A directory for map files
+    ├── QBgMap_MC_0.8.0.xlsx  # Example MC register map
+    └── QBgMap_LC_0.11.0.xlsx # Example LC register map
 ```
 
 ### 3.3. Install Python Libraries
 
-Install the required Python packages using a single `pip` command:
+Install the required Python packages using `pip`. `pandas` and `openpyxl` are necessary for the register parsing feature.
 
 ```bash
-pip install requests pyserial protobuf
+pip install requests pyserial protobuf pandas openpyxl
 ```
 
 Your script is now ready to run.
 
 ## 4. How to Run the Script
 
-The script is controlled via command-line arguments from your terminal.
+The script is controlled via command-line arguments. The mode is chosen automatically based on the flags you provide.
 
 ### 4.1. General Syntax
 
 ```bash
-python io_test.py [filename] [--mode MODE] [--ip IP_ADDRESS] [--port COM_PORT]
+# For HTTP or Serial modes
+python bitwise.py <command_file> [--ip DEVICE | --port PORT] [OPTIONS]
+
+# For Decode-only mode
+python bitwise.py --file <log_file> [OPTIONS]
 ```
 
 ### 4.2. Arguments
 
-*   `filename` (Positional, Required): The path to the command file you want to execute.
-*   `--mode` (Optional): The execution mode.
-    *   `http` (Default): For Read/Write commands over REST.
-    *   `serial`: For general string commands over a COM port.
-*   `--ip` (Optional): The IP address and port for HTTP mode. (Default: `192.168.0.59:7124`)
-*   `--port` (Optional): The COM port for serial mode (e.g., `COM3` on Windows, `/dev/ttyUSB0` on Linux). (Default: `COM3`)
+*   `command_file` (Positional): The path to the command file to execute. **Required for HTTP and Serial modes.**
+*   `--ip <DEVICE>`: **Enables HTTP mode.** The target device. Can be a name from `devices.json` (e.g., `mc-51`) or a raw IP address and port (e.g., `192.168.0.59:7124`).
+*   `--port <PORT>`: **Enables Serial mode.** The COM port to use (e.g., `COM3` on Windows, `/dev/ttyUSB0` on Linux).
+*   `--file <LOG_FILE>`: **Enables Decode mode.** The local data log file to parse.
+*   `--no-parse`: (Optional) Disables the default behavior of parsing register values into bit-fields.
+*   `--dir <PATH>`: (Optional) Specifies the directory to search for register map (`.xlsx`) files. (Default: current directory).
+*   `--mc-version <VER>` / `--lc-version <VER>`: (Optional) Specify an exact register map version (e.g., `0.8.0`) to use, overriding the automatic "latest file" search.
 
 ### 4.3. Usage Examples
 
-**HTTP Mode (Default)**
+**HTTP Mode**
 
 ```bash
-# Run with a command file, using the default IP address
-python io_test.py commands.txt
+# Run against a device named 'mc-51' in devices.json (with default parsing)
+python bitwise.py my_commands.txt --ip mc-51
 
-# Run with a specific IP address
-python io_test.py commands.txt --ip 10.0.0.50:8000
+# Run against a raw IP address and disable parsing
+python bitwise.py my_commands.txt --ip 192.168.0.59:7124 --no-parse
 ```
 
 **Serial Mode**
 
 ```bash
-# Run in serial mode, using the default COM port
-python io_test.py serial_commands.txt --mode serial
+# Run in serial mode on COM5 (with default parsing)
+python bitwise.py serial_commands.txt --port COM5
+```
 
-# Run in serial mode with a specific COM port
-python io_test.py serial_commands.txt --mode serial --port COM5
+**Decode Mode**
+
+```bash
+# Decode a local log file. Parsing is always enabled for this mode.
+python bitwise.py --file captured_data.log
+
+# Use register maps from a specific directory
+python bitwise.py --file captured_data.log --dir ./register_maps
 ```
 
 ## 5. Command File Syntax
 
-Create a `.txt` file with one command per line.
+Create a `.txt` file with one command per line. When parsing is enabled (the default), the output of Read/Write commands will be decoded into bit-fields.
 
 ### 5.1. Comments
 
-Use the `#` symbol for comments. They can be on their own line or at the end of a command line.
+Use the `#` symbol for comments.
 
 ```
 # This is a full-line comment
 W A000091C 00000010   # This is an in-line comment
 ```
 
-### 5.2. HTTP Read (`R`)
+### 5.2. HTTP/Serial Read (`R`)
 
 Reads one or more 32-bit registers.
 
 *   **Syntax:** `R <address_hex> <count_decimal>`
-*   **Example:**
-    ```
-    # Read 4 registers starting from address A00088F0
-    R A00088F0 4
-    ```
+*   **Example:** `R A00088F0 4`
 
-### 5.3. HTTP Write (`W`)
+### 5.3. HTTP/Serial Write (`W`)
 
-Writes one or more 32-bit values. The payload can be specified in two formats.
+Writes one or more 32-bit values. The payload can be space-separated bytes (must be a multiple of 4) or full 8-character hex words.
 
-*   **Syntax 1: Space-separated Bytes**
-    The number of bytes must be a multiple of 4.
-
-    ```
-    # Write one word (0x01020304) to address 60000000
-    W 60000000 01 02 03 04
-
-    # Write two words (0xAABBCCDD and 0xDEADBEEF) to 60000004
-    W 60000004 AA BB CC DD DE AD BE EF
-    ```
-
-*   **Syntax 2: Space-separated Words**
-    Each part of the payload must be a full 8-character hex string.
-
-    ```
-    # Write one word
-    W 60000008 05060708
-
-    # Write two words
-    W 6000000C AABBCCDD DEADBEEF
-    ```
+*   **Example (Bytes):** `W 60000000 01 02 03 04`
+*   **Example (Words):** `W 60000008 05060708`
 
 ### 5.4. Delay (`D`)
 
-Pauses the execution of the script for a specified duration. 
+Pauses script execution. Useful in command files for HTTP/Serial modes.
 
 *   **Syntax:** `D <milliseconds>`
-*   **Example:**
-    ```
-    # Wait for 5 seconds
-    D 5000
-
-    # Wait for 100 milliseconds
-    D 100
-    ```
+*   **Example:** `D 500`
 
 ### 5.5. Loop (`LOOP`)
 
-Repeats a block of commands a specified number of times. Loops can contain any other valid commands.
+Repeats a block of commands.
 
-*   **Syntax:**
-    ```
-    LOOP <count_decimal>
-      ... commands to repeat ...
-    LOOP END
-    ```
+*   **Syntax:** `LOOP <count>` ... `LOOP END`
 *   **Example:**
     ```
-    # Toggle a pin 5 times with a delay
     LOOP 5
-      W A0000000 00000001  # Set pin high
-      D 500                 # Wait 500ms
-      W A0000000 00000000  # Set pin low
-      D 500                 # Wait 500ms
+      W 60000000 00000001
+      D 500
+      W 60000000 00000000
+      D 500
     LOOP END
     ```
-
-### 5.6. Serial Commands
-
-In `serial` mode, any line that is not a comment is treated as a string command to be sent to the device. Spaces are automatically converted to hyphens (`-`).
-
-*   **Example `serial_commands.txt`:**
-    ```
-    # Check version
-    V
-
-    # Set some parameter
-    set-parameter-A 100
-    ```
-
-## 6. Troubleshooting
-
-*   **`ModuleNotFoundError: No module named '..._pb2'`**: The required Protobuf file (e.g., `memory_pb2.py`) is missing from the directory. Ensure all necessary `_pb2.py` files are in the same folder as `io_test.py`.
-*   **`serial.SerialException: could not open port ...`**: The COM port is incorrect, already in use by another application, or you do not have permission to access it.
-*   **`requests.exceptions.ConnectionError`**: The script cannot connect to the specified IP address. Check that the device is on the network, the IP is correct, and there are no firewall issues.
