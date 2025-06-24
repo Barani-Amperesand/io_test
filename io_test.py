@@ -168,7 +168,14 @@ class SerialCommandSender:
         return None
     def _parse_and_decode_read_response(self, response_text, base_address_str):
         base_addr_int = int(base_address_str, 16)
-        hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', response_text)
+
+        try:
+            data_payload = response_text.split(':', 1)[1]
+        except IndexError:
+            print("No data found in serial response (could not find ':' delimiter).")
+            return
+
+        hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', data_payload)
         if not hex_bytes: print("No data found in serial response to parse."); return
         for i in range(0, len(hex_bytes), 4):
             chunk = hex_bytes[i:i+4]
