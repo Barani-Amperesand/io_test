@@ -3,6 +3,7 @@ import time
 import sys
 import re
 import argparse
+import json
 from urllib.parse import urlencode
 import memory_pb2
 import register_pb2
@@ -30,10 +31,10 @@ def perform_version_check(comm_interface, mc_filepath, lc_filepath):
     Reads hardware revision registers and compares them against register map file versions.
     """
     print("Performing hardware and file version integrity check...")
-    
+
     mc_match = re.search(r'(\d+)\.(\d+)\.(\d+)', os.path.basename(mc_filepath))
     lc_match = re.search(r'(\d+)\.(\d+)\.(\d+)', os.path.basename(lc_filepath))
-    
+
     if not mc_match or not lc_match:
         print("WARNING: Could not parse version numbers from one or more register map filenames. Skipping check.")
         return
@@ -72,7 +73,7 @@ def perform_version_check(comm_interface, mc_filepath, lc_filepath):
                 f"  Register map file is for: {lc_file_ver[0]}.{lc_file_ver[1]}.{lc_file_ver[2]}",
                 "Parsing results may be incorrect."
             ])
-    
+
     print("Version integrity check complete.\n")
 
 
@@ -255,7 +256,7 @@ class CommandParsing:
                     milliseconds, seconds = int(command_line.split()[1]), int(command_line.split()[1]) / 1000.0
                     print(f">> Delaying for {milliseconds} milliseconds..."); time.sleep(seconds)
                 except (ValueError, IndexError): print(f"Error: Invalid delay format: '{command_line}'.")
-                continue 
+                continue
             match = re.match(self.pattern, command_line)
             if match:
                 operation, address, payload_str = match.groups()
@@ -289,49 +290,118 @@ class CommandParsing:
                     print()
             else: print(f"Skipping non-matching command: '{command_line}'")
 
+def get_ip_config(device_identifier, config_file='devices.json'):
+    """
+    Resolves a device identifier to an IP:port string.
+    - If identifier is a key in config_file, returns its config (e.g., "mc-51").
+    - If identifier is not in config_file, assumes it's a direct IP:port string.
+    """
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                devices = json.load(f)
+            if device_identifier in devices:
+                device_info = devices[device_identifier]
+                return f"{device_info['ip']}:{device_info['port']}"
+        except (json.JSONDecodeError, KeyError) as e:
+            # Raise an error to be caught in main for a clearer message
+            raise ValueError(f"Error reading or parsing {config_file}: {e}")
+    # If config file doesn't exist or identifier not found, assume it's a direct IP.
+    return device_identifier
+
+# ==============================================================================
+# Main Execution Logic
+# ==============================================================================
 def main():
-    parser = argparse.ArgumentParser(description="A versatile tool for device communication and offline log decoding.", formatter_class=argparse.RawTextHelpFormatter)
-    
-    # Mode selection
-    parser.add_argument("--mode", choices=['serial', 'http', 'decode'], default='http', 
-                        help="Execution mode:\n"
-                             "'serial': Send commands from a file to a COM port.\n"
-                             "'http': Send commands from a file over HTTP.\n"
-                             "'decode': Decode a local file of register data without device connection.\n"
-                             "(default: http)")
-    
-    # File inputs
-    parser.add_argument("--command-file", help="Path to the command file to execute (for serial/http modes).")
-    parser.add_argument("--input-file", help="Path to a data file with addr/value pairs to decode (for decode mode).")
-    
-    # Connection settings
-    parser.add_argument("--ip", default='192.168.0.59:7124', help="IP address and port for HTTP mode.")
-    parser.add_argument("--port", default='COM3', help="COM port for serial mode.")
-    
-    # Parsing and version control
-    parser.add_argument('--parse', action='store_true', help="Enable register value parsing and bit-field decoding (for serial/http modes).")
+    # To use device names, create a 'devices.json' file in the same directory:
+    # {
+    #   "mc-51": { "ip": "192.0.2.51", "port": 7124 },
+    #   "mc-58": { "ip": "192.168.0.58", "port": 7124 }
+    # }
+    parser = argparse.ArgumentParser(
+        description="A versatile tool for device communication and log decoding. The execution mode is determined automatically. Parsing is enabled by default.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog="""
+Examples:
+  # Run commands over HTTP by specifying a device name from devices.json
+  python %(prog)s my_commands.txt --ip mc-51
+
+  # Run commands over HTTP by specifying a raw IP address and port
+  python %(prog)s my_commands.txt --ip 192.168.0.59:7124
+
+  # Run commands over Serial
+  python %(prog)s my_commands.txt --port COM3
+
+  # Decode a local file (parsing is always enabled for this mode)
+  python %(prog)s --file captured_data.log
+"""
+    )
+
+    # Core arguments that determine mode
+    parser.add_argument(
+        "command_file", nargs='?',
+        help="Path to the command file to execute (required for http/serial modes)."
+    )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--ip",
+        help="Use http mode. Provide a device name from devices.json or a direct IP:PORT."
+    )
+    mode_group.add_argument(
+        "--port",
+        help="Use serial mode with the specified COM port (e.g., COM3 or /dev/ttyUSB0)."
+    )
+    mode_group.add_argument(
+        "--file",
+        help="Use decode-only mode on a local file of register data."
+    )
+
+    # Ancillary arguments
+    parser.add_argument(
+        '--no-parse',
+        dest='parse',
+        action='store_false',
+        help="Disable register value parsing and bit-field decoding."
+    )
     parser.add_argument("--dir", default=".", help="Directory to search for register map files.")
     parser.add_argument("--mc-version", help="Specify an exact MC version to use (e.g., '0.8.0').")
     parser.add_argument("--lc-version", help="Specify an exact LC version to use (e.g., '0.11.0').")
-    
+    parser.set_defaults(parse=True)
+
     args = parser.parse_args()
 
-    # Validate arguments based on mode
-    if args.mode in ['serial', 'http'] and not args.command_file:
-        parser.error("--command-file is required for serial and http modes.")
-    if args.mode == 'decode' and not args.input_file:
-        parser.error("--input-file is required for decode mode.")
-    
-    print("IO Tool - v2.0")
+    # Mode Detection and Argument Validation
+    mode = 'http'  # Default mode
+    if args.port:
+        mode = 'serial'
+    elif args.file:
+        mode = 'decode'
+    elif args.ip:
+        mode = 'http'
 
-    # Decoder setup is common for all modes that need it
-    parsing_is_enabled = args.parse or (args.mode == 'decode')
+    if mode == 'http' and not args.ip:
+        parser.error("An --ip argument is required for http mode. Please provide a device name or a raw IP:PORT.")
+
+    if mode in ['serial', 'http']:
+        if not args.command_file:
+            parser.error(f"A positional 'command_file' argument is required for {mode} mode.")
+    elif mode == 'decode':
+        if args.command_file:
+            parser.error("A 'command_file' positional argument cannot be used with --file (decode mode).")
+        if not args.parse:
+            print("INFO: The --no-parse flag is ignored in 'decode' mode as parsing is required.")
+        args.parse = True
+
+    print("BitWise - v1.0")
+
+    # Decoder Setup
     decoder = None
     mc_file, lc_file = None, None
-    if parsing_is_enabled:
+    if args.parse:
         if not DECODER_AVAILABLE:
             print("\nWARNING: Parsing is disabled because 'parse_register.py' could not be imported.\n")
         else:
+            print("INFO: Parsing is enabled.")
             search_dir = args.dir
             mc_file = os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.xlsx") if args.mc_version else find_latest_file("QBgMap_MC_", search_dir)
             lc_file = os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.xlsx") if args.lc_version else find_latest_file("QBgMap_LC_", search_dir)
@@ -339,51 +409,61 @@ def main():
                 print("\nWARNING: Parsing is disabled. Could not find required MC/LC register map files.\n")
             else:
                 decoder = RegisterDecoder(mc_file_path=mc_file, lc_file_path=lc_file)
-    
-    print() # Newline for cleaner output start
+    else:
+        print("INFO: Parsing is disabled by user.")
+    print()
 
-    if args.mode == 'serial':
+    # Mode Execution
+    if mode == 'serial':
         print(f"Running in SERIAL mode (File: {args.command_file}, Port: {args.port})")
         print()
         sender = None
         try:
             sender = SerialCommandSender(args.port, decoder=decoder)
-            if mc_file and lc_file: perform_version_check(sender, mc_file, lc_file)
+            if mc_file and lc_file and decoder: perform_version_check(sender, mc_file, lc_file)
             sender.process_file(args.command_file)
-        except Exception as e: print(f"An error occurred during serial execution: {e}")
+        except Exception as e:
+            print(f"An error occurred during serial execution: {e}")
         finally:
             if sender: sender.close()
         print("Serial mode finished.")
 
-    elif args.mode == 'http':
-        print(f"Running in HTTP mode (File: {args.command_file}, IP: {args.ip})")
+    elif mode == 'http':
+        try:
+            ip_address = get_ip_config(args.ip)
+        except ValueError as e:
+            parser.error(f"IP Configuration Error: {e}")
+
+        print(f"Running in HTTP mode (File: {args.command_file}, Target: {ip_address})")
         print()
         try:
             with open(args.command_file, 'r') as f: lines = f.readlines()
-            parser_obj = CommandParsing(ip=args.ip, decoder=decoder)
-            if mc_file and lc_file: perform_version_check(parser_obj.reg_interface, mc_file, lc_file)
+            parser_obj = CommandParsing(ip=ip_address, decoder=decoder)
+            if mc_file and lc_file and decoder: perform_version_check(parser_obj.reg_interface, mc_file, lc_file)
             parser_obj.parse(lines)
-        except Exception as e: print(f"An error occurred during HTTP execution: {e}")
+        except Exception as e:
+            print(f"An error occurred during HTTP execution: {e}")
         print("HTTP mode finished.")
 
-    elif args.mode == 'decode':
-        print(f"Running in DECODE-ONLY mode (Input File: {args.input_file})")
+    elif mode == 'decode':
+        print(f"Running in DECODE-ONLY mode (Input File: {args.file})")
         print()
         if not decoder:
             print("Error: Parsing is required for decode mode, but the decoder could not be initialized.")
             print("Please ensure 'parse_register.py' and the required register map files are available.")
             sys.exit(1)
-        
+
         line_pattern = re.compile(r"^(0x[0-9a-fA-F]+)[\s:]+(0x[0-9a-fA-F]+)")
         try:
-            with open(args.input_file, 'r') as f:
+            with open(args.file, 'r') as f:
                 for line in f:
                     match = line_pattern.match(line.strip())
                     if match:
                         decoder.decode(match.group(1), match.group(2), do_print=True)
         except FileNotFoundError:
-            print(f"Error: Input file not found: {args.input_file}"); sys.exit(1)
+            print(f"Error: Input file not found: {args.file}"); sys.exit(1)
         print("Decode-only mode finished.")
+
 
 if __name__ == "__main__":
     main()
