@@ -160,6 +160,7 @@ class RegisterDecoder:
     @staticmethod
     def _load_register_map(excel_path: str) -> Dict[str, List[Dict[str, str]]]:
         register_map, REQUIRED_COLUMNS = {}, ['IO_Tool_Addr', 'RegDescription', 'Instance', 'Register', 'posslice', 'Label', 'RegSize']
+        folat_fields = ('_real', '_filt', '_scale', '_offset')
         try:
             df = pd.read_excel(excel_path, sheet_name=0, dtype=str).fillna('')
             if not all(col in df.columns for col in REQUIRED_COLUMNS):
@@ -171,7 +172,7 @@ class RegisterDecoder:
                 except (ValueError, TypeError): reg_size = 1
                 try: base_addr_int = int(base_addr_str, 16)
                 except ValueError: continue
-                original_label, data_format = row.get('Label', '').strip(), 'float' if row.get('Label', '').strip().endswith(('_real', '_filt')) else 'decimal'
+                original_label, data_format = row.get('Label', '').strip(), 'float' if row.get('Label', '').strip().endswith(folat_fields) else 'decimal'
                 for i in range(reg_size):
                     offset_addr_str = f"{base_addr_int + (i * 4):X}"
                     instance_label = f"{original_label}_{i + 1}" if reg_size > 1 else original_label
