@@ -363,7 +363,7 @@ Examples:
         action='store_false',
         help="Disable register value parsing and bit-field decoding."
     )
-    parser.add_argument("--dir", default=".", help="Directory to search for register map files.")
+    parser.add_argument("--dir", default="./register_maps/", help="Directory to search for register map files.")
     parser.add_argument("--mc-version", help="Specify an exact MC version to use (e.g., '0.8.0').")
     parser.add_argument("--lc-version", help="Specify an exact LC version to use (e.g., '0.11.0').")
     parser.set_defaults(parse=True)
