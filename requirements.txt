@@ -1,0 +1,12 @@
+# For serial port communication (--mode serial)
+pyserial
+
+# For HTTP communication (--mode http)
+requests
+
+# For reading .xlsx register map files
+pandas
+openpyxl
+
+# For decoding Protobuf messages from the device
+protobuf
