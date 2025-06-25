@@ -1,17 +1,18 @@
 import argparse
+import csv
 import os
 import re
 import struct
 import sys
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import pandas as pd
+
 
 
 # Standalone utility function for file discovery
 def find_latest_file(prefix: str, directory: str) -> Optional[str]:
     """Finds the file in a directory that matches a prefix and has the latest version."""
-    pattern = re.compile(re.escape(prefix) + r"(\d+\.\d+\.\d+)\.xlsx$")
+    pattern = re.compile(re.escape(prefix) + r"(\d+\.\d+\.\d+)\.csv$")
     latest_version, latest_file_path = (0, 0, 0), None
     try:
         for filename in os.listdir(directory):
@@ -35,8 +36,8 @@ class RegisterDecoder:
         Initializes the decoder by loading register maps. This is the expensive, one-time setup.
 
         Args:
-            mc_file_path: Path to the Master Controller register map Excel file.
-            lc_file_path: Path to the Local Controller register map Excel file.
+            mc_file_path: Path to the Master Controller register map CSV file.
+            lc_file_path: Path to the Local Controller register map CSV file.
         """
         print(
             f"INFO: Initializing decoder with MC map: '{os.path.basename(mc_file_path)}'",
@@ -248,7 +249,8 @@ class RegisterDecoder:
         return mem_map
 
     @staticmethod
-    def _load_register_map(excel_path: str) -> Dict[str, List[Dict[str, str]]]:
+    def _load_register_map(csv_path: str) -> Dict[str, List[Dict[str, str]]]:
+        """Loads a register map from a CSV file using the built-in csv module."""
         register_map, REQUIRED_COLUMNS = {}, [
             "IO_Tool_Addr",
             "RegDescription",
@@ -258,56 +260,72 @@ class RegisterDecoder:
             "Label",
             "RegSize",
         ]
-        folat_fields = ("_real", "_filt", "_scale", "_offset")
+        float_fields = ("_real", "_filt", "_scale", "_offset")
         try:
-            df = pd.read_excel(excel_path, sheet_name=0, dtype=str).fillna("")
-            if not all(col in df.columns for col in REQUIRED_COLUMNS):
-                print(
-                    f"Error: Excel file '{excel_path}' is missing {set(REQUIRED_COLUMNS) - set(df.columns)}",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            for row in df.to_dict("records"):
-                base_addr_str = row.get("IO_Tool_Addr", "").strip().upper()
-                if not base_addr_str:
-                    continue
-                try:
-                    reg_size = int(float(row.get("RegSize", "1").strip()))
-                except (ValueError, TypeError):
-                    reg_size = 1
-                try:
-                    base_addr_int = int(base_addr_str, 16)
-                except ValueError:
-                    continue
-                original_label, data_format = row.get("Label", "").strip(), (
-                    "float"
-                    if row.get("Label", "").strip().endswith(folat_fields)
-                    else "decimal"
-                )
-                for i in range(reg_size):
-                    offset_addr_str = f"{base_addr_int + (i * 4):X}"
-                    instance_label = (
-                        f"{original_label}_{i + 1}" if reg_size > 1 else original_label
+            with open(csv_path, mode="r", encoding="utf-8", newline="") as csvfile:
+                reader = csv.DictReader(csvfile)
+
+                # Ensure the header has all required columns
+                if not reader.fieldnames or not all(
+                    col in reader.fieldnames for col in REQUIRED_COLUMNS
+                ):
+                    missing_cols = set(REQUIRED_COLUMNS) - set(reader.fieldnames or [])
+                    print(
+                        f"Error: CSV file '{csv_path}' is missing required columns: {missing_cols}",
+                        file=sys.stderr,
                     )
-                    field_info = {
-                        "description": row.get("RegDescription", "").strip(),
-                        "slice": row.get("posslice", "").strip(),
-                        "label": instance_label,
-                        "format": data_format,
-                        "register_name": row.get("Instance", "").strip()
-                        + "_"
-                        + row.get("Register", "").strip(),
-                    }
-                    if offset_addr_str not in register_map:
-                        register_map[offset_addr_str] = []
-                    if field_info not in register_map[offset_addr_str]:
-                        register_map[offset_addr_str].append(field_info)
+                    sys.exit(1)
+
+                for row_data in reader:
+                    # Replicate pandas' .fillna('') by ensuring all values are strings
+                    row = {k: (v if v is not None else "") for k, v in row_data.items()}
+
+                    base_addr_str = row.get("IO_Tool_Addr", "").strip().upper()
+                    if not base_addr_str:
+                        continue
+                    try:
+                        # Defensive float conversion in case value is '1.0'
+                        reg_size = int(float(row.get("RegSize", "1").strip()))
+                    except (ValueError, TypeError):
+                        reg_size = 1
+                    try:
+                        base_addr_int = int(base_addr_str, 16)
+                    except ValueError:
+                        continue
+
+                    original_label = row.get("Label", "").strip()
+                    data_format = (
+                        "float"
+                        if original_label.endswith(float_fields)
+                        else "decimal"
+                    )
+
+                    for i in range(reg_size):
+                        offset_addr_str = f"{base_addr_int + (i * 4):X}"
+                        instance_label = (
+                            f"{original_label}_{i + 1}"
+                            if reg_size > 1
+                            else original_label
+                        )
+                        field_info = {
+                            "description": row.get("RegDescription", "").strip(),
+                            "slice": row.get("posslice", "").strip(),
+                            "label": instance_label,
+                            "format": data_format,
+                            "register_name": row.get("Instance", "").strip()
+                            + "_"
+                            + row.get("Register", "").strip(),
+                        }
+                        if offset_addr_str not in register_map:
+                            register_map[offset_addr_str] = []
+                        if field_info not in register_map[offset_addr_str]:
+                            register_map[offset_addr_str].append(field_info)
         except FileNotFoundError:
-            print(f"Error: The file '{excel_path}' was not found.", file=sys.stderr)
+            print(f"Error: The file '{csv_path}' was not found.", file=sys.stderr)
             sys.exit(1)
         except Exception as e:
             print(
-                f"An error occurred while reading Excel file '{excel_path}': {e}",
+                f"An error occurred while reading CSV file '{csv_path}': {e}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -356,12 +374,12 @@ if __name__ == "__main__":
 
     search_dir = args.dir
     mc_file_path = (
-        os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.xlsx")
+        os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.csv")
         if args.mc_version
         else find_latest_file("QBgMap_MC_", search_dir)
     )
     lc_file_path = (
-        os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.xlsx")
+        os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.csv")
         if args.lc_version
         else find_latest_file("QBgMap_LC_", search_dir)
     )

@@ -2,12 +2,10 @@ import argparse
 import json
 import os
 import re
-import struct
 import sys
 import time
 from urllib.parse import urlencode
 
-import memory_pb2
 import register_pb2
 import requests
 import serial
@@ -302,14 +300,14 @@ class ReadRegisterInterface:
         except requests.exceptions.RequestException as e:
             print(f"Error sending request: {e}")
             return
-        data, message = response.content, memory_pb2.MemoryResponse()
+        data, register_interface = response.content, register_pb2.RegisterInterface()
         try:
-            message.ParseFromString(data)
+            register_interface.ParseFromString(data)
         except Exception as e:
             print(f"Error decoding protobuf: {e}")
             return
-        for i, value in enumerate(message.register_interface.result[: int(count)]):
-            addr_offset = message.register_interface.address + (i * 4)
+        for i, value in enumerate(register_interface.result[: int(count)]):
+            addr_offset = register_interface.address + (i * 4)
             if self.decoder:
                 self.decoder.decode(addr_offset, value, do_print=True)
             else:
@@ -323,11 +321,11 @@ class ReadRegisterInterface:
             response.raise_for_status()
         except requests.exceptions.RequestException:
             return None
-        data, message = response.content, memory_pb2.MemoryResponse()
+        data, register_interface = response.content, register_pb2.RegisterInterface()
         try:
-            message.ParseFromString(data)
-            if message.register_interface.result:
-                return message.register_interface.result[0]
+            register_interface.ParseFromString(data)
+            if register_interface.result:
+                return register_interface.result[0]
         except Exception:
             return None
         return None
@@ -355,9 +353,9 @@ class ReadRegisterInterface:
         except requests.exceptions.RequestException as e:
             print(f"Error sending request: {e}")
             return
-        data, message = response.content, memory_pb2.MemoryResponse()
+        data, register_interface = response.content, register_pb2.RegisterInterface()
         try:
-            message.ParseFromString(data)
+            register_interface.ParseFromString(data)
         except Exception as e:
             print(f"Error decoding protobuf: {e}")
             return
@@ -471,6 +469,14 @@ def get_ip_config(device_identifier, config_file="devices.json"):
 # Main Execution Logic
 # ==============================================================================
 def main():
+    # Dynamically determine the correct way to call the program in examples
+    if getattr(sys, 'frozen', False):
+        # Running as a bundled exe (e.g., bitwise.exe)
+        invocation_cmd = os.path.basename(sys.executable)
+    else:
+        # Running as a .py script
+        invocation_cmd = f"python {os.path.basename(sys.argv[0])}"
+
     # To use device names, create a 'devices.json' file in the same directory:
     # {
     #   "mc-51": { "ip": "192.0.2.51", "port": 7124 },
@@ -479,19 +485,19 @@ def main():
     parser = argparse.ArgumentParser(
         description="A versatile tool for device communication and log decoding. The execution mode is determined automatically. Parsing is enabled by default.",
         formatter_class=argparse.RawTextHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
   # Run commands over HTTP by specifying a device name from devices.json
-  python %(prog)s my_commands.txt --ip mc-51
+  {invocation_cmd} my_commands.txt --ip mc-51
 
   # Run commands over HTTP by specifying a raw IP address and port
-  python %(prog)s my_commands.txt --ip 192.168.0.59:7124
+  {invocation_cmd} my_commands.txt --ip 192.168.0.59:7124
 
   # Run commands over Serial
-  python %(prog)s my_commands.txt --port COM3
+  {invocation_cmd} my_commands.txt --port COM3
 
   # Decode a local file (parsing is always enabled for this mode)
-  python %(prog)s --file captured_data.log
+  {invocation_cmd} --file captured_data.log
 """,
     )
 
@@ -524,7 +530,7 @@ Examples:
     parser.add_argument(
         "--dir",
         default="./register_maps/",
-        help="Directory to search for register map files.",
+        help="Directory to search for register map files. Defaults to './register_maps/'.",
     )
     parser.add_argument(
         "--mc-version", help="Specify an exact MC version to use (e.g., '0.8.0')."
@@ -580,12 +586,12 @@ Examples:
             print("INFO: Parsing is enabled.")
             search_dir = args.dir
             mc_file = (
-                os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.xlsx")
+                os.path.join(search_dir, f"QBgMap_MC_{args.mc_version}.csv")
                 if args.mc_version
                 else find_latest_file("QBgMap_MC_", search_dir)
             )
             lc_file = (
-                os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.xlsx")
+                os.path.join(search_dir, f"QBgMap_LC_{args.lc_version}.csv")
                 if args.lc_version
                 else find_latest_file("QBgMap_LC_", search_dir)
             )
